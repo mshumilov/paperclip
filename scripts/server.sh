@@ -3,8 +3,9 @@
 # Запуск в продакшене как в Docker: node + tsx loader + server/dist/index.js из корня репо.
 #
 # Использование:
-#   ./scripts/deploy-server.sh deploy
-#   ./scripts/deploy-server.sh clean-remote   # остановить сервис и удалить REMOTE_DIR
+#   ./scripts/server.sh deploy
+#   ./scripts/server.sh clean-remote   # остановить сервис и удалить REMOTE_DIR
+#   ./scripts/server.sh restart | stop | status | logs
 #
 # Переменные: SERVER_HOST, REMOTE_DIR, SERVICE_NAME, SSH_PORT
 
@@ -174,6 +175,18 @@ logs_cmd() {
   "${SSH[@]}" "root@${SERVER_HOST#*@}" "journalctl -u '$SERVICE_NAME' -n 80 --no-pager"
 }
 
+restart_cmd() {
+  log_info "Перезапуск $SERVICE_NAME на $SERVER_HOST..."
+  "${SSH[@]}" "root@${SERVER_HOST#*@}" "systemctl restart '$SERVICE_NAME'"
+  log_ok "Сервис $SERVICE_NAME перезапущен"
+}
+
+stop_cmd() {
+  log_warn "Остановка $SERVICE_NAME на $SERVER_HOST..."
+  "${SSH[@]}" "root@${SERVER_HOST#*@}" "systemctl stop '$SERVICE_NAME'"
+  log_ok "Сервис $SERVICE_NAME остановлен"
+}
+
 print_help() {
   cat <<EOF
 Использование: $0 <команда>
@@ -183,6 +196,8 @@ print_help() {
   clean-legacy Удалить только /home/ms/dev/paperclip (старый git-клон)
   status       systemctl status + порты
   logs         journalctl -u $SERVICE_NAME
+  restart      systemctl restart (нужен SSH root, как у status)
+  stop         systemctl stop
 
 Переменные окружения:
   SERVER_HOST=${SERVER_HOST}
@@ -203,6 +218,8 @@ case "$cmd" in
   clean-legacy) remove_legacy_repo ;;
   status) status_cmd ;;
   logs) logs_cmd ;;
+  restart) restart_cmd ;;
+  stop) stop_cmd ;;
   help|--help|-h|"") print_help ;;
   *)
     log_err "Неизвестная команда: $cmd"
