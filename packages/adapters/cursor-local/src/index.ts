@@ -1,3 +1,5 @@
+export { CURSOR_ADAPTER_PROBE_PROMPT, cursorProbeMathAnswerLooksValid } from "./cursor-probe.js";
+
 export const type = "cursor";
 export const label = "Cursor CLI (local)";
 export const DEFAULT_CURSOR_LOCAL_MODEL = "auto";

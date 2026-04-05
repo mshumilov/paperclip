@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { cursorProbeMathAnswerLooksValid } from "@paperclipai/adapter-cursor-local";
 import { testEnvironment } from "@paperclipai/adapter-cursor-local/server";
 
 async function writeFakeAgentCommand(binDir: string, argsCapturePath: string): Promise<string> {
@@ -14,18 +15,37 @@ if (outPath) {
 }
 console.log(JSON.stringify({
   type: "assistant",
-  message: { content: [{ type: "output_text", text: "hello" }] },
+  message: { content: [{ type: "output_text", text: "4" }] },
 }));
 console.log(JSON.stringify({
   type: "result",
   subtype: "success",
-  result: "hello",
+  result: "4",
 }));
 `;
   await fs.writeFile(commandPath, script, "utf8");
   await fs.chmod(commandPath, 0o755);
   return commandPath;
 }
+
+describe("cursorProbeMathAnswerLooksValid", () => {
+  it("accepts 4 and 2+2=4 style answers", () => {
+    expect(cursorProbeMathAnswerLooksValid("4")).toBe(true);
+    expect(cursorProbeMathAnswerLooksValid("2+2=4")).toBe(true);
+    expect(cursorProbeMathAnswerLooksValid("2 + 2 = 4")).toBe(true);
+    expect(cursorProbeMathAnswerLooksValid("(Привет.) 4")).toBe(true);
+  });
+
+  it("rejects hello-only and bare non-math text", () => {
+    expect(cursorProbeMathAnswerLooksValid("Привет.")).toBe(false);
+    expect(cursorProbeMathAnswerLooksValid("hello")).toBe(false);
+  });
+
+  it("rejects 14 and 24 as the digit 4", () => {
+    expect(cursorProbeMathAnswerLooksValid("14")).toBe(false);
+    expect(cursorProbeMathAnswerLooksValid("24")).toBe(false);
+  });
+});
 
 describe("cursor environment diagnostics", () => {
   beforeEach(() => {
@@ -60,7 +80,7 @@ describe("cursor environment diagnostics", () => {
     await fs.rm(path.dirname(cwd), { recursive: true, force: true });
   });
 
-  it("adds --yolo to hello probe args by default", async () => {
+  it("adds --yolo to math sanity probe args by default", async () => {
     const root = path.join(
       os.tmpdir(),
       `paperclip-cursor-local-probe-${Date.now()}-${Math.random().toString(16).slice(2)}`,

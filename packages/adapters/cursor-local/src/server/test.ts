@@ -15,6 +15,7 @@ import {
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { CURSOR_ADAPTER_PROBE_PROMPT, cursorProbeMathAnswerLooksValid } from "../cursor-probe.js";
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "../index.js";
 import { parseCursorJsonl } from "./parse.js";
 import { hasCursorTrustBypassArg } from "../shared/trust.js";
@@ -172,9 +173,9 @@ export async function testEnvironment(
   if (canRunProbe) {
     if (!commandLooksLike(command, "agent")) {
       checks.push({
-        code: "cursor_hello_probe_skipped_custom_command",
+        code: "cursor_math_probe_skipped_custom_command",
         level: "info",
-        message: "Skipped hello probe because command is not `agent`.",
+        message: "Skipped math sanity probe because command is not `agent`.",
         detail: command,
         hint: "Use the `agent` CLI command to run the automatic installation and auth probe.",
       });
@@ -190,7 +191,7 @@ export async function testEnvironment(
       if (model) args.push("--model", model);
       if (autoTrustEnabled) args.push("--yolo");
       if (extraArgs.length > 0) args.push(...extraArgs);
-      args.push("Respond with hello.");
+      args.push(CURSOR_ADAPTER_PROBE_PROMPT);
 
       const probe = await runChildProcess(
         `cursor-envtest-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -210,30 +211,30 @@ export async function testEnvironment(
 
       if (probe.timedOut) {
         checks.push({
-          code: "cursor_hello_probe_timed_out",
+          code: "cursor_math_probe_timed_out",
           level: "warn",
-          message: "Cursor hello probe timed out.",
-          hint: "Retry the probe. If this persists, verify `agent -p --mode ask --output-format json \"Respond with hello.\"` manually.",
+          message: "Cursor math sanity probe timed out.",
+          hint: `Retry the probe. If this persists, verify \`agent -p --mode ask --output-format json ${JSON.stringify(CURSOR_ADAPTER_PROBE_PROMPT)}\` manually.`,
         });
       } else if ((probe.exitCode ?? 1) === 0) {
         const summary = parsed.summary.trim();
-        const hasHello = /\bhello\b/i.test(summary);
+        const ok = cursorProbeMathAnswerLooksValid(summary);
         checks.push({
-          code: hasHello ? "cursor_hello_probe_passed" : "cursor_hello_probe_unexpected_output",
-          level: hasHello ? "info" : "warn",
-          message: hasHello
-            ? "Cursor hello probe succeeded."
-            : "Cursor probe ran but did not return `hello` as expected.",
+          code: ok ? "cursor_math_probe_passed" : "cursor_math_probe_unexpected_output",
+          level: ok ? "info" : "warn",
+          message: ok
+            ? "Cursor math sanity probe succeeded."
+            : "Cursor probe ran but did not return a clear answer to 2+2 (expected 4 or 2+2=4).",
           ...(summary ? { detail: summary.replace(/\s+/g, " ").trim().slice(0, 240) } : {}),
-          ...(hasHello
+          ...(ok
             ? {}
             : {
-                hint: "Try `agent -p --mode ask --output-format json \"Respond with hello.\"` manually to inspect full output.",
+                hint: `Try \`agent -p --mode ask --output-format json ${JSON.stringify(CURSOR_ADAPTER_PROBE_PROMPT)}\` manually to inspect full output.`,
               }),
         });
       } else if (CURSOR_AUTH_REQUIRED_RE.test(authEvidence)) {
         checks.push({
-          code: "cursor_hello_probe_auth_required",
+          code: "cursor_math_probe_auth_required",
           level: "warn",
           message: "Cursor CLI is installed, but authentication is not ready.",
           ...(detail ? { detail } : {}),
@@ -241,11 +242,11 @@ export async function testEnvironment(
         });
       } else {
         checks.push({
-          code: "cursor_hello_probe_failed",
+          code: "cursor_math_probe_failed",
           level: "error",
-          message: "Cursor hello probe failed.",
+          message: "Cursor math sanity probe failed.",
           ...(detail ? { detail } : {}),
-          hint: "Run `agent -p --mode ask --output-format json \"Respond with hello.\"` manually in this working directory to debug.",
+          hint: `Run \`agent -p --mode ask --output-format json ${JSON.stringify(CURSOR_ADAPTER_PROBE_PROMPT)}\` manually in this working directory to debug.`,
         });
       }
     }

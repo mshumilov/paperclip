@@ -37,7 +37,10 @@ import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
   DEFAULT_CODEX_LOCAL_MODEL
 } from "@paperclipai/adapter-codex-local";
-import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
+import {
+  CURSOR_ADAPTER_PROBE_PROMPT,
+  DEFAULT_CURSOR_LOCAL_MODEL,
+} from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
 import { resolveRouteOnboardingOptions } from "../lib/onboarding-route";
 import { AsciiArtAnimation } from "./AsciiArtAnimation";
@@ -960,8 +963,8 @@ export function OnboardingWizard() {
                             Adapter environment check
                           </p>
                           <p className="text-[11px] text-muted-foreground">
-                            Runs a live probe that asks the adapter CLI to
-                            respond with hello.
+                            Runs a live probe that verifies the adapter CLI can
+                            complete a short sanity check (adapter-specific).
                           </p>
                         </div>
                         <Button
@@ -1020,7 +1023,7 @@ export function OnboardingWizard() {
                           <p className="font-medium">Manual debug</p>
                           <p className="text-muted-foreground font-mono break-all">
                             {adapterType === "cursor"
-                              ? `${effectiveAdapterCommand} -p --mode ask --output-format json \"Respond with hello.\"`
+                              ? `${effectiveAdapterCommand} -p --mode ask --output-format json ${JSON.stringify(CURSOR_ADAPTER_PROBE_PROMPT)}`
                               : adapterType === "codex_local"
                               ? `${effectiveAdapterCommand} exec --json -`
                               : adapterType === "gemini_local"
@@ -1031,7 +1034,11 @@ export function OnboardingWizard() {
                           </p>
                           <p className="text-muted-foreground">
                             Prompt:{" "}
-                            <span className="font-mono">Respond with hello.</span>
+                            <span className="font-mono">
+                              {adapterType === "cursor"
+                                ? CURSOR_ADAPTER_PROBE_PROMPT
+                                : "Respond with hello."}
+                            </span>
                           </p>
                           {adapterType === "cursor" ||
                           adapterType === "codex_local" ||
