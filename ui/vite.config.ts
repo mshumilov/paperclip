@@ -5,6 +5,13 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    // Lowers peak RSS during `vite build` (helps Docker/CI OOM); gzip size report is non-essential here.
+    reportCompressedSize: false,
+    rollupOptions: {
+      maxParallelFileOps: 4,
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

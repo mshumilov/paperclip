@@ -1,4 +1,9 @@
-FROM node:lts-trixie-slim AS base
+# syntax=docker/dockerfile:1
+# Cross-build from Apple Silicon: `docker build --platform linux/amd64` sets TARGETPLATFORM.
+# Default TARGETPLATFORM=linux/amd64 matches typical x86_64 servers; override for local arm64 image:
+#   docker build --build-arg TARGETPLATFORM=linux/arm64 ...
+ARG TARGETPLATFORM=linux/amd64
+FROM --platform=${TARGETPLATFORM} node:lts-trixie-slim AS base
 ARG USER_UID=1000
 ARG USER_GID=1000
 RUN apt-get update \
@@ -42,6 +47,11 @@ RUN pnpm install --frozen-lockfile
 
 FROM base AS build
 WORKDIR /app
+# Exit 137 during `vite build` is often the cgroup OOM killer: a very large --max-old-space-size
+# can still get the whole process killed if Docker/host RAM is tight. Default is conservative;
+# override when the builder has headroom: docker build --build-arg NODE_MEMORY_MB=4096 .
+ARG NODE_MEMORY_MB=2048
+ENV NODE_OPTIONS="--max-old-space-size=${NODE_MEMORY_MB}"
 COPY --from=deps /app /app
 COPY . .
 RUN pnpm --filter @paperclipai/ui build

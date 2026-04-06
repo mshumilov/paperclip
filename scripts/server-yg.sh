@@ -8,6 +8,9 @@
 #
 # If PAPERCLIP_PUBLIC_URL is unset, defaults to http://108.174.78.157:<PAPERCLIP_PORT>.
 #
+# The remote server is linux/amd64; Apple Silicon builds must target it explicitly.
+#   DOCKER_BUILD_PLATFORM  default linux/amd64 (pass to docker build --platform)
+#
 # Common optional env:
 #   BETTER_AUTH_SECRET
 #   PAPERCLIP_PUBLIC_URL   e.g. https://paperclip.example.com
@@ -29,6 +32,7 @@ cd "$REPO_ROOT"
 
 DEPLOY_SSH="root@108.174.78.157"
 DEPLOY_SSH_PORT="10220"
+DOCKER_BUILD_PLATFORM="${DOCKER_BUILD_PLATFORM:-linux/amd64}"
 REMOTE_DIR="${REMOTE_DIR:-/opt/yg/tools/agents}"
 PAPERCLIP_IMAGE="${PAPERCLIP_IMAGE:-paperclip:remote}"
 PAPERCLIP_PORT="${PAPERCLIP_PORT:-3100}"
@@ -99,9 +103,9 @@ out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 }
 
-echo "==> Build image (${PAPERCLIP_IMAGE})"
+echo "==> Build image (${PAPERCLIP_IMAGE}) for ${DOCKER_BUILD_PLATFORM}"
 if [[ -z "${SKIP_BUILD:-}" ]]; then
-  docker build -f "${REPO_ROOT}/Dockerfile" -t "${PAPERCLIP_IMAGE}" "${REPO_ROOT}"
+  docker build --platform "${DOCKER_BUILD_PLATFORM}" -f "${REPO_ROOT}/Dockerfile" -t "${PAPERCLIP_IMAGE}" "${REPO_ROOT}"
 else
   echo "    (SKIP_BUILD set — not rebuilding)"
 fi
