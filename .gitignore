@@ -12,6 +12,9 @@ data/
 tmp-*
 cli/tmp/
 
+# Local deploy secret (scripts/server-yg.sh)
+scripts/.server-yg.better-auth-secret
+
 # Scratch/seed scripts (but not scripts/ dir)
 check-*.mjs
 !scripts/check-*.mjs

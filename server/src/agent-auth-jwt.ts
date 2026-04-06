@@ -25,8 +25,20 @@ function parseNumber(value: string | undefined, fallback: number) {
   return Math.floor(parsed);
 }
 
+/**
+ * Signing secret for short-lived agent run JWTs (`PAPERCLIP_API_KEY` during heartbeats).
+ * Prefer `PAPERCLIP_AGENT_JWT_SECRET`; if unset, use `BETTER_AUTH_SECRET` so authenticated
+ * deployments that only set the latter still mint and verify local agent tokens (matches
+ * startup validation in `server/src/index.ts`).
+ */
+function resolveAgentJwtSigningSecret(): string | undefined {
+  const explicit = process.env.PAPERCLIP_AGENT_JWT_SECRET?.trim();
+  if (explicit) return explicit;
+  return process.env.BETTER_AUTH_SECRET?.trim() || undefined;
+}
+
 function jwtConfig() {
-  const secret = process.env.PAPERCLIP_AGENT_JWT_SECRET;
+  const secret = resolveAgentJwtSigningSecret();
   if (!secret) return null;
 
   return {
