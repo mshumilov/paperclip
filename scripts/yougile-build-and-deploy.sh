@@ -16,6 +16,8 @@
 #   DOCKER_BUILD_PLATFORM  e.g. linux/amd64 if cross-building; omit on native amd64 server
 #   NODE_MEMORY_MB         Docker build-arg for Node heap during UI build (optional)
 #   SKIP_BUILD=1           skip image rebuild, only recreate containers
+#   HEALTHCHECK_MAX_ATTEMPTS  localhost /api/health retries after up (default 25)
+#   HEALTHCHECK_SLEEP_SEC     seconds between attempts (default 2)
 #
 # Example:
 #   sudo ./scripts/server-yg.sh
@@ -147,12 +149,26 @@ echo "    Health (from this host — use 127.0.0.1; curl to the public IP on the
 echo "      curl -fsS 'http://127.0.0.1:${PAPERCLIP_PORT}/api/health'"
 echo "    From another machine (open firewall/tcp ${PAPERCLIP_PORT} first):"
 echo "      curl -fsS '${PAPERCLIP_PUBLIC_URL}/api/health'"
+echo "    If the UI shows instance setup, create the first admin (inside container, same DB as the server):"
+echo "      docker exec -it -u node -e HOME=/paperclip -w /app docker-paperclip-1 node ./cli/dist/index.js auth bootstrap-ceo"
+
+HEALTHCHECK_MAX_ATTEMPTS="${HEALTHCHECK_MAX_ATTEMPTS:-25}"
+HEALTHCHECK_SLEEP_SEC="${HEALTHCHECK_SLEEP_SEC:-2}"
 
 if command -v curl >/dev/null 2>&1; then
-  sleep 2
-  if curl -fsS --connect-timeout 5 "http://127.0.0.1:${PAPERCLIP_PORT}/api/health" >/dev/null; then
-    echo "==> Health OK (localhost:${PAPERCLIP_PORT})"
-  else
-    echo "==> Health check failed — try: docker compose -f ${COMPOSE_FILE} logs -f" >&2
+  HEALTH_OK=0
+  for ((i = 1; i <= HEALTHCHECK_MAX_ATTEMPTS; i++)); do
+    if curl -fsS --connect-timeout 5 "http://127.0.0.1:${PAPERCLIP_PORT}/api/health" >/dev/null 2>&1; then
+      HEALTH_OK=1
+      echo "==> Health OK (localhost:${PAPERCLIP_PORT}, attempt ${i}/${HEALTHCHECK_MAX_ATTEMPTS})"
+      break
+    fi
+    if [[ "${i}" -lt "${HEALTHCHECK_MAX_ATTEMPTS}" ]]; then
+      sleep "${HEALTHCHECK_SLEEP_SEC}"
+    fi
+  done
+  if [[ "${HEALTH_OK}" -ne 1 ]]; then
+    echo "==> Health check failed after ${HEALTHCHECK_MAX_ATTEMPTS} attempts — the app may still be starting; try curl again or:" >&2
+    echo "    docker compose -f ${COMPOSE_FILE} --env-file ${ENV_FILE} logs -f" >&2
   fi
 fi
