@@ -6,7 +6,7 @@
 # If BETTER_AUTH_SECRET is unset, it is generated once and stored in
 #   ${REMOTE_DIR}/.better-auth-secret (default REMOTE_DIR=/opt/paperclip).
 #
-# If PAPERCLIP_PUBLIC_URL is unset, defaults to http://108.174.78.157:<PAPERCLIP_PORT>.
+# If PAPERCLIP_PUBLIC_URL is unset, defaults to https://bot.yougile.com (see script).
 #
 # Optional env:
 #   REMOTE_DIR          directory for .env + secret file; default /opt/paperclip
@@ -19,6 +19,15 @@
 #
 # Example:
 #   sudo ./scripts/server-yg.sh
+#
+# Compose подставляет ${BETTER_AUTH_SECRET:?…} из env-файла. Любые ручные команды
+# docker compose без --env-file дадут ошибку «BETTER_AUTH_SECRET must be set»:
+#   docker compose -f docker/docker-compose.quickstart.yml --env-file /opt/paperclip/.env logs -f
+#   docker compose -f docker/docker-compose.quickstart.yml --env-file /opt/paperclip/.env ps
+#   docker compose -f docker/docker-compose.quickstart.yml --env-file /opt/paperclip/.env down
+#
+# Первый instance admin (authenticated): внутри контейнера, та же БД что у сервера (образ с CLI, см. Dockerfile):
+#   docker exec -it -u node -e HOME=/paperclip -w /app docker-paperclip-1 node ./cli/dist/index.js auth bootstrap-ceo
 
 set -euo pipefail
 
