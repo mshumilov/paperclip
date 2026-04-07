@@ -43,7 +43,9 @@ if [[ -z "${BETTER_AUTH_SECRET:-}" ]]; then
     echo "==> Generated BETTER_AUTH_SECRET → ${SERVER_YG_SECRET_FILE}" >&2
   fi
 fi
-PAPERCLIP_PUBLIC_URL="${PAPERCLIP_PUBLIC_URL:-http://108.174.78.157:${PAPERCLIP_PORT}}"
+PAPERCLIP_PUBLIC_URL="${PAPERCLIP_PUBLIC_URL:-https://bot.yougile.com}"
+# Behind nginx TLS: trust X-Forwarded-Proto (see doc/NGINX-HTTPS.md)
+PAPERCLIP_TRUST_PROXY="${PAPERCLIP_TRUST_PROXY:-1}"
 
 if [[ "${PAPERCLIP_DATA_DIR}" != /* ]]; then
   echo "PAPERCLIP_DATA_DIR must be an absolute path (got: ${PAPERCLIP_DATA_DIR})" >&2
@@ -64,6 +66,7 @@ write_deploy_env() {
   local out="$1"
   BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET}" \
     PAPERCLIP_PUBLIC_URL="${PAPERCLIP_PUBLIC_URL}" \
+    PAPERCLIP_TRUST_PROXY="${PAPERCLIP_TRUST_PROXY}" \
     PAPERCLIP_PORT="${PAPERCLIP_PORT}" \
     PAPERCLIP_DATA_DIR="${PAPERCLIP_DATA_DIR}" \
     OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
@@ -80,6 +83,7 @@ out = pathlib.Path(os.environ["OUT"])
 keys = [
     "BETTER_AUTH_SECRET",
     "PAPERCLIP_PUBLIC_URL",
+    "PAPERCLIP_TRUST_PROXY",
     "PAPERCLIP_PORT",
     "PAPERCLIP_DATA_DIR",
     "OPENAI_API_KEY",
@@ -92,12 +96,19 @@ PY
 
 mkdir -p "${REMOTE_DIR}" "${PAPERCLIP_DATA_DIR}"
 
+# Image runs as user `node` (UID/GID 1000). A root-created host dir is not writable → EACCES on /paperclip/...
+PAPERCLIP_VOLUME_UID="${PAPERCLIP_VOLUME_UID:-1000}"
+PAPERCLIP_VOLUME_GID="${PAPERCLIP_VOLUME_GID:-1000}"
+if [[ "$(id -u)" -eq 0 ]] && command -v chown >/dev/null 2>&1; then
+  chown -R "${PAPERCLIP_VOLUME_UID}:${PAPERCLIP_VOLUME_GID}" "${PAPERCLIP_DATA_DIR}"
+fi
+
 ENV_FILE="${REMOTE_DIR}/.env"
 write_deploy_env "${ENV_FILE}"
 chmod 600 "${ENV_FILE}"
 
 # Compose interpolates ${BETTER_AUTH_SECRET:?…} from the process environment; export + --env-file for build/up.
-export BETTER_AUTH_SECRET PAPERCLIP_PUBLIC_URL PAPERCLIP_PORT PAPERCLIP_DATA_DIR
+export BETTER_AUTH_SECRET PAPERCLIP_PUBLIC_URL PAPERCLIP_TRUST_PROXY PAPERCLIP_PORT PAPERCLIP_DATA_DIR
 export OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 
@@ -123,4 +134,16 @@ fi
 "${up_cmd[@]}"
 
 echo "==> Done."
-echo "    curl -fsS '${PAPERCLIP_PUBLIC_URL}/api/health'"
+echo "    Health (from this host — use 127.0.0.1; curl to the public IP on the same machine often fails):"
+echo "      curl -fsS 'http://127.0.0.1:${PAPERCLIP_PORT}/api/health'"
+echo "    From another machine (open firewall/tcp ${PAPERCLIP_PORT} first):"
+echo "      curl -fsS '${PAPERCLIP_PUBLIC_URL}/api/health'"
+
+if command -v curl >/dev/null 2>&1; then
+  sleep 2
+  if curl -fsS --connect-timeout 5 "http://127.0.0.1:${PAPERCLIP_PORT}/api/health" >/dev/null; then
+    echo "==> Health OK (localhost:${PAPERCLIP_PORT})"
+  else
+    echo "==> Health check failed — try: docker compose -f ${COMPOSE_FILE} logs -f" >&2
+  fi
+fi
