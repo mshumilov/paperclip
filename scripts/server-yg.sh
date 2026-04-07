@@ -1,52 +1,46 @@
 #!/usr/bin/env bash
-# Deploy Paperclip to a remote host via SSH using a locally built image (no remote build).
+# Run on the target server from a git checkout of Paperclip (repo = Dockerfile + docker/).
 #
-# Target host is fixed in this script: root@108.174.78.157, SSH port 10220.
+# Builds the image with docker compose and starts the stack on this machine — no SSH/SCP from a laptop.
 #
-# If BETTER_AUTH_SECRET is unset, a secret is generated once and stored in
-#   scripts/.server-yg.better-auth-secret (gitignored). Override with env to replace.
+# If BETTER_AUTH_SECRET is unset, it is generated once and stored in
+#   ${REMOTE_DIR}/.better-auth-secret (default REMOTE_DIR=/opt/paperclip).
 #
 # If PAPERCLIP_PUBLIC_URL is unset, defaults to http://108.174.78.157:<PAPERCLIP_PORT>.
 #
-# The remote server is linux/amd64; Apple Silicon builds must target it explicitly.
-#   DOCKER_BUILD_PLATFORM  default linux/amd64 (pass to docker build --platform)
-#
-# Common optional env:
-#   BETTER_AUTH_SECRET
-#   PAPERCLIP_PUBLIC_URL   e.g. https://paperclip.example.com
-#   REMOTE_DIR          default /opt/yg/tools/agents
-#   PAPERCLIP_IMAGE     default paperclip:remote
+# Optional env:
+#   REMOTE_DIR          directory for .env + secret file; default /opt/paperclip
 #   PAPERCLIP_PORT      host port, default 3100
-#   PAPERCLIP_DATA_DIR  absolute path on server for /paperclip volume, default ${REMOTE_DIR}/data
-#   OPENAI_API_KEY, ANTHROPIC_API_KEY
-#   SKIP_BUILD=1        reuse existing local image tag (skip docker build)
+#   PAPERCLIP_DATA_DIR  absolute path for /paperclip volume; default ${REMOTE_DIR}/data
+#   PAPERCLIP_PUBLIC_URL, BETTER_AUTH_SECRET, OPENAI_API_KEY, ANTHROPIC_API_KEY
+#   DOCKER_BUILD_PLATFORM  e.g. linux/amd64 if cross-building; omit on native amd64 server
+#   NODE_MEMORY_MB         Docker build-arg for Node heap during UI build (optional)
+#   SKIP_BUILD=1           skip image rebuild, only recreate containers
 #
 # Example:
-#   ./scripts/server-yg.sh
-#   PAPERCLIP_PUBLIC_URL=https://paperclip.example.com ./scripts/server-yg.sh
+#   sudo ./scripts/server-yg.sh
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-DEPLOY_SSH="root@108.174.78.157"
-DEPLOY_SSH_PORT="10220"
-DOCKER_BUILD_PLATFORM="${DOCKER_BUILD_PLATFORM:-linux/amd64}"
-REMOTE_DIR="${REMOTE_DIR:-/opt/yg/tools/agents}"
-PAPERCLIP_IMAGE="${PAPERCLIP_IMAGE:-paperclip:remote}"
+REMOTE_DIR="${REMOTE_DIR:-/opt/paperclip}"
 PAPERCLIP_PORT="${PAPERCLIP_PORT:-3100}"
 PAPERCLIP_DATA_DIR="${PAPERCLIP_DATA_DIR:-$REMOTE_DIR/data}"
 
-SERVER_YG_SECRET_FILE="${REPO_ROOT}/scripts/.server-yg.better-auth-secret"
+COMPOSE_FILE="${REPO_ROOT}/docker/docker-compose.quickstart.yml"
+
+SERVER_YG_SECRET_FILE="${SERVER_YG_SECRET_FILE:-$REMOTE_DIR/.better-auth-secret}"
 if [[ -z "${BETTER_AUTH_SECRET:-}" ]]; then
   if [[ -f "${SERVER_YG_SECRET_FILE}" ]]; then
     BETTER_AUTH_SECRET="$(tr -d '\n\r' < "${SERVER_YG_SECRET_FILE}")"
   else
     BETTER_AUTH_SECRET="$(openssl rand -hex 32)"
+    mkdir -p "$(dirname "${SERVER_YG_SECRET_FILE}")"
     umask 077
     printf '%s' "${BETTER_AUTH_SECRET}" > "${SERVER_YG_SECRET_FILE}"
-    echo "==> Generated BETTER_AUTH_SECRET → ${SERVER_YG_SECRET_FILE} (keep private)" >&2
+    echo "==> Generated BETTER_AUTH_SECRET → ${SERVER_YG_SECRET_FILE}" >&2
   fi
 fi
 PAPERCLIP_PUBLIC_URL="${PAPERCLIP_PUBLIC_URL:-http://108.174.78.157:${PAPERCLIP_PORT}}"
@@ -56,13 +50,8 @@ if [[ "${PAPERCLIP_DATA_DIR}" != /* ]]; then
   exit 1
 fi
 
-SSH=(ssh -p "${DEPLOY_SSH_PORT}" -o StrictHostKeyChecking=accept-new "${DEPLOY_SSH}")
-SCP=(scp -P "${DEPLOY_SSH_PORT}" -o StrictHostKeyChecking=accept-new)
-
-COMPOSE_SRC="${REPO_ROOT}/docker/docker-compose.remote-image.yml"
-
-if [[ ! -f "${COMPOSE_SRC}" ]]; then
-  echo "Missing ${COMPOSE_SRC}" >&2
+if [[ ! -f "${COMPOSE_FILE}" ]]; then
+  echo "Missing ${COMPOSE_FILE} (run from Paperclip repo root)" >&2
   exit 1
 fi
 
@@ -71,10 +60,9 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-write_remote_env() {
+write_deploy_env() {
   local out="$1"
-  PAPERCLIP_IMAGE="${PAPERCLIP_IMAGE}" \
-    BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET}" \
+  BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET}" \
     PAPERCLIP_PUBLIC_URL="${PAPERCLIP_PUBLIC_URL}" \
     PAPERCLIP_PORT="${PAPERCLIP_PORT}" \
     PAPERCLIP_DATA_DIR="${PAPERCLIP_DATA_DIR}" \
@@ -90,7 +78,6 @@ def esc(s: str) -> str:
 
 out = pathlib.Path(os.environ["OUT"])
 keys = [
-    "PAPERCLIP_IMAGE",
     "BETTER_AUTH_SECRET",
     "PAPERCLIP_PUBLIC_URL",
     "PAPERCLIP_PORT",
@@ -103,44 +90,32 @@ out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 }
 
-echo "==> Build image (${PAPERCLIP_IMAGE}) for ${DOCKER_BUILD_PLATFORM}"
-if [[ -z "${SKIP_BUILD:-}" ]]; then
-  docker build --platform "${DOCKER_BUILD_PLATFORM}" -f "${REPO_ROOT}/Dockerfile" -t "${PAPERCLIP_IMAGE}" "${REPO_ROOT}"
-else
-  echo "    (SKIP_BUILD set — not rebuilding)"
+mkdir -p "${REMOTE_DIR}" "${PAPERCLIP_DATA_DIR}"
+
+ENV_FILE="${REMOTE_DIR}/.env"
+write_deploy_env "${ENV_FILE}"
+chmod 600 "${ENV_FILE}"
+
+echo "==> docker compose (${COMPOSE_FILE})"
+
+build_cmd=(docker compose -f "${COMPOSE_FILE}" build)
+if [[ -n "${DOCKER_BUILD_PLATFORM:-}" ]]; then
+  build_cmd+=(--platform "${DOCKER_BUILD_PLATFORM}")
+fi
+if [[ -n "${NODE_MEMORY_MB:-}" ]]; then
+  build_cmd+=(--build-arg "NODE_MEMORY_MB=${NODE_MEMORY_MB}")
 fi
 
-TMP_TAR="$(mktemp -t paperclip-docker.XXXXXX.tar)"
-TMP_ENV="$(mktemp -t paperclip-remote.XXXXXX.env)"
-cleanup() {
-  rm -f "${TMP_TAR}" "${TMP_ENV}"
-}
-trap cleanup EXIT
+up_cmd=(
+  docker compose -f "${COMPOSE_FILE}"
+  --env-file "${ENV_FILE}"
+  up -d --remove-orphans
+)
 
-echo "==> docker save → ${TMP_TAR}"
-docker save "${PAPERCLIP_IMAGE}" -o "${TMP_TAR}"
+if [[ -z "${SKIP_BUILD:-}" ]]; then
+  "${build_cmd[@]}"
+fi
+"${up_cmd[@]}"
 
-write_remote_env "${TMP_ENV}"
-
-echo "==> Prepare remote ${REMOTE_DIR}"
-"${SSH[@]}" "mkdir -p '${REMOTE_DIR}' '${PAPERCLIP_DATA_DIR}'"
-
-echo "==> Upload image tarball, compose, env"
-"${SCP[@]}" "${TMP_TAR}" "${DEPLOY_SSH}:${REMOTE_DIR}/image.tar"
-"${SCP[@]}" "${COMPOSE_SRC}" "${DEPLOY_SSH}:${REMOTE_DIR}/docker-compose.yml"
-"${SCP[@]}" "${TMP_ENV}" "${DEPLOY_SSH}:${REMOTE_DIR}/.env"
-"${SSH[@]}" "chmod 600 '${REMOTE_DIR}/.env'"
-
-echo "==> docker load && compose up"
-# shellcheck disable=SC2029
-"${SSH[@]}" bash -s <<REMOTE
-set -euo pipefail
-cd $(printf '%q' "${REMOTE_DIR}")
-docker load -i image.tar
-rm -f image.tar
-docker compose -f docker-compose.yml --env-file .env up -d --remove-orphans
-docker image prune -f >/dev/null
-REMOTE
-
-echo "==> Done. Health check (from your machine, if URL is reachable):"
+echo "==> Done."
 echo "    curl -fsS '${PAPERCLIP_PUBLIC_URL}/api/health'"
