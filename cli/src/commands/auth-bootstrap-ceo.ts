@@ -16,13 +16,19 @@ function createInviteToken() {
 
 function resolveDbUrl(configPath?: string, explicitDbUrl?: string) {
   if (explicitDbUrl) return explicitDbUrl;
-  const config = readConfig(configPath);
+  // Match server/src/config.ts: DATABASE_URL wins; do not require a config file on disk.
   if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  const config = readConfig(configPath);
   if (config?.database.mode === "postgres" && config.database.connectionString) {
     return config.database.connectionString;
   }
   if (config?.database.mode === "embedded-postgres") {
     const port = config.database.embeddedPostgresPort ?? 54329;
+    return `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`;
+  }
+  // No config file (e.g. Docker): server defaults to embedded PostgreSQL on the default port.
+  if (!config) {
+    const port = Number(process.env.PAPERCLIP_EMBEDDED_POSTGRES_PORT) || 54329;
     return `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`;
   }
   return null;
@@ -56,12 +62,20 @@ export async function bootstrapCeoInvite(opts: {
   const configPath = resolveConfigPath(opts.config);
   loadPaperclipEnvFile(configPath);
   const config = readConfig(configPath);
-  if (!config) {
+  const deploymentMode =
+    config?.server.deploymentMode ??
+    (process.env.PAPERCLIP_DEPLOYMENT_MODE === "authenticated" ||
+    process.env.PAPERCLIP_DEPLOYMENT_MODE === "local_trusted"
+      ? process.env.PAPERCLIP_DEPLOYMENT_MODE
+      : undefined) ??
+    "local_trusted";
+
+  if (!config && deploymentMode !== "authenticated") {
     p.log.error(`No config found at ${configPath}. Run ${pc.cyan("paperclip onboard")} first.`);
     return;
   }
 
-  if (config.server.deploymentMode !== "authenticated") {
+  if (deploymentMode !== "authenticated") {
     p.log.info("Deployment mode is local_trusted. Bootstrap CEO invite is only required for authenticated mode.");
     return;
   }
