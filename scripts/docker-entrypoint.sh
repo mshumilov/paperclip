@@ -23,7 +23,13 @@ if [ "$(id -g node)" -ne "$PGID" ]; then
 fi
 
 if [ "$changed" = "1" ]; then
-    chown -R node:node /paperclip
+  chown -R node:node /paperclip
+fi
+
+# Cursor Agent CLI installer puts the binary on the mounted volume; expose it as `agent` on PATH
+# for adapter runs (symlink in the image layer is lost when the container is recreated).
+if [ -x /paperclip/.local/bin/agent ] && [ ! -e /usr/local/bin/agent ]; then
+  ln -sf /paperclip/.local/bin/agent /usr/local/bin/agent || true
 fi
 
 exec gosu node "$@"

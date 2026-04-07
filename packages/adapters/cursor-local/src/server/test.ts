@@ -18,6 +18,7 @@ import path from "node:path";
 import { CURSOR_ADAPTER_PROBE_PROMPT, cursorProbeMathAnswerLooksValid } from "../cursor-probe.js";
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "../index.js";
 import { parseCursorJsonl } from "./parse.js";
+import { resolveCursorCliCommand } from "./resolve-cursor-cli.js";
 import { hasCursorTrustBypassArg } from "../shared/trust.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
@@ -95,7 +96,6 @@ export async function testEnvironment(
 ): Promise<AdapterEnvironmentTestResult> {
   const checks: AdapterEnvironmentCheck[] = [];
   const config = parseObject(ctx.config);
-  const command = asString(config.command, "agent");
   const cwd = asString(config.cwd, process.cwd());
 
   try {
@@ -120,6 +120,8 @@ export async function testEnvironment(
     if (typeof value === "string") env[key] = value;
   }
   const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+  const homeDir = runtimeEnv.HOME ?? process.env.HOME ?? os.homedir();
+  const command = await resolveCursorCliCommand(asString(config.command, "agent"), homeDir);
   try {
     await ensureCommandResolvable(command, cwd, runtimeEnv);
     checks.push({
