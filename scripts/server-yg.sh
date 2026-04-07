@@ -96,9 +96,14 @@ ENV_FILE="${REMOTE_DIR}/.env"
 write_deploy_env "${ENV_FILE}"
 chmod 600 "${ENV_FILE}"
 
+# Compose interpolates ${BETTER_AUTH_SECRET:?…} from the process environment; export + --env-file for build/up.
+export BETTER_AUTH_SECRET PAPERCLIP_PUBLIC_URL PAPERCLIP_PORT PAPERCLIP_DATA_DIR
+export OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+
 echo "==> docker compose (${COMPOSE_FILE})"
 
-build_cmd=(docker compose -f "${COMPOSE_FILE}" build)
+build_cmd=(docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" build)
 if [[ -n "${DOCKER_BUILD_PLATFORM:-}" ]]; then
   build_cmd+=(--platform "${DOCKER_BUILD_PLATFORM}")
 fi
