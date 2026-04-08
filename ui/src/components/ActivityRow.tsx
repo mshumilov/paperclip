@@ -3,6 +3,8 @@ import { Identity } from "./Identity";
 import { timeAgo } from "../lib/timeAgo";
 import { cn } from "../lib/utils";
 import { deriveProjectUrlKey, type ActivityEvent, type Agent } from "@paperclipai/shared";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ChevronDown } from "lucide-react";
 
 const ACTION_VERBS: Record<string, string> = {
   "issue.created": "created",
@@ -79,6 +81,60 @@ function entityLink(entityType: string, entityId: string, name?: string | null):
   }
 }
 
+/** Rich `details` from plugins (e.g. plugin-razum-scheduler `ctx.activity.log` metadata). */
+function extractCommandOutputDetails(
+  details: Record<string, unknown> | null | undefined,
+): { stdout: string; stderr: string; exitCode: unknown; cwd?: string } | null {
+  if (!details || typeof details !== "object") return null;
+  const stdout = typeof details.stdoutTail === "string" ? details.stdoutTail.trim() : "";
+  const stderr = typeof details.stderrTail === "string" ? details.stderrTail.trim() : "";
+  const cwd = typeof details.cwd === "string" ? details.cwd : undefined;
+  const exitCode = details.exitCode;
+  if (!stdout && !stderr && exitCode === undefined && !cwd) return null;
+  return { stdout, stderr, exitCode, cwd };
+}
+
+function ActivityCommandOutputBlock({
+  details,
+}: {
+  details: { stdout: string; stderr: string; exitCode: unknown; cwd?: string };
+}) {
+  const hasBody = Boolean(details.stdout || details.stderr);
+  if (!hasBody && details.exitCode === undefined && !details.cwd) return null;
+
+  return (
+    <Collapsible className="group border-t border-border/60 bg-muted/20">
+      <CollapsibleTrigger className="flex w-full items-center gap-1 px-4 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted/40">
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+        <span>Command output</span>
+        {details.exitCode !== undefined && details.exitCode !== null && (
+          <span className="ml-1 font-mono text-[10px] opacity-80">exit {String(details.exitCode)}</span>
+        )}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="space-y-2 px-4 pb-3 pt-0">
+          {details.cwd ? (
+            <div className="font-mono text-[10px] text-muted-foreground break-all">{details.cwd}</div>
+          ) : null}
+          {details.stderr ? (
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-destructive/30 bg-destructive/5 p-2 font-mono text-[11px] text-destructive">
+              {details.stderr}
+            </pre>
+          ) : null}
+          {details.stdout ? (
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-background/80 p-2 font-mono text-[11px] text-foreground">
+              {details.stdout}
+            </pre>
+          ) : null}
+          {!details.stdout && !details.stderr ? (
+            <p className="text-xs text-muted-foreground">No captured stdout/stderr for this entry.</p>
+          ) : null}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 interface ActivityRowProps {
   event: ActivityEvent;
   agentMap: Map<string, Agent>;
@@ -124,23 +180,29 @@ export function ActivityRow({ event, agentMap, entityNameMap, entityTitleMap, cl
     </div>
   );
 
-  const classes = cn(
+  const commandOut = extractCommandOutputDetails(event.details);
+
+  const rowShell = cn(className);
+  const rowInner = cn(
     "px-4 py-2 text-sm",
     link && "cursor-pointer hover:bg-accent/50 transition-colors",
-    className,
   );
 
   if (link) {
     return (
-      <Link to={link} className={cn(classes, "no-underline text-inherit block")}>
-        {inner}
-      </Link>
+      <div className={rowShell}>
+        <Link to={link} className={cn(rowInner, "no-underline text-inherit block")}>
+          {inner}
+        </Link>
+        {commandOut ? <ActivityCommandOutputBlock details={commandOut} /> : null}
+      </div>
     );
   }
 
   return (
-    <div className={classes}>
-      {inner}
+    <div className={rowShell}>
+      <div className={rowInner}>{inner}</div>
+      {commandOut ? <ActivityCommandOutputBlock details={commandOut} /> : null}
     </div>
   );
 }
