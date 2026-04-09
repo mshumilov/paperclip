@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendRunHistoryEntries,
   mergeRunHistory,
   parseRunHistory,
   parseSchedulerConfig,
@@ -119,6 +120,16 @@ describe("parseRunHistory / mergeRunHistory", () => {
     }
     expect(parseRunHistory(acc)).toHaveLength(100);
     expect(parseRunHistory(acc)[99].id).toBe("id-104");
+  });
+
+  it("appendRunHistoryEntries preserves order and extends prior history", () => {
+    const e1 = { ...entry, id: "run-1:task-a" };
+    const e2 = { ...entry, id: "run-1:task-b" };
+    expect(appendRunHistoryEntries([], [e1, e2]).map((r) => r.id)).toEqual(["run-1:task-a", "run-1:task-b"]);
+    expect(appendRunHistoryEntries(JSON.stringify([e1]), [e2]).map((r) => r.id)).toEqual([
+      "run-1:task-a",
+      "run-1:task-b",
+    ]);
   });
 });
 

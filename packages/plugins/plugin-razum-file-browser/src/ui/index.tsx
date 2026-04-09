@@ -240,17 +240,19 @@ function NewFileDialog({
 
 function ConfirmDeleteDialog({
   filePath,
+  isDirectory,
   onConfirm,
   onCancel,
 }: {
   filePath: string;
+  isDirectory?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   return (
     <div className="flex items-center gap-2 border-b border-border bg-destructive/10 px-4 py-2 text-xs">
       <span className="text-destructive">
-        Delete <strong>{filePath}</strong>?
+        Delete {isDirectory ? "folder" : "file"} <strong>{filePath}</strong>{isDirectory ? " and all its contents" : ""}?
       </span>
       <button
         type="button"
@@ -271,8 +273,66 @@ function ConfirmDeleteDialog({
 }
 
 // ---------------------------------------------------------------------------
+// Rename Dialog (inline)
+// ---------------------------------------------------------------------------
+
+function RenameDialog({
+  currentName,
+  onConfirm,
+  onCancel,
+}: {
+  currentName: string;
+  onConfirm: (newName: string) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(currentName);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.focus();
+    const dotIndex = currentName.lastIndexOf(".");
+    if (dotIndex > 0) {
+      input.setSelectionRange(0, dotIndex);
+    } else {
+      input.select();
+    }
+  }, []);
+
+  const handleSubmit = () => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === currentName) {
+      onCancel();
+      return;
+    }
+    onConfirm(trimmed);
+  };
+
+  return (
+    <div className="flex items-center gap-1 border-b border-border px-2 py-1">
+      <span className="text-xs text-muted-foreground shrink-0">Rename:</span>
+      <input
+        ref={inputRef}
+        type="text"
+        className="min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") handleSubmit();
+          if (e.key === "Escape") onCancel();
+        }}
+        onBlur={onCancel}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // File Tree
 // ---------------------------------------------------------------------------
+
+type ContextAction = { path: string; isDirectory: boolean; type: "delete" | "rename" };
 
 type FileTreeNodeProps = {
   entry: FileEntry;
@@ -281,7 +341,7 @@ type FileTreeNodeProps = {
   workspaceId: string;
   selectedPath: string | null;
   onSelect: (path: string) => void;
-  onDeleteRequest: (path: string) => void;
+  onContextAction: (action: ContextAction) => void;
   depth?: number;
 };
 
@@ -292,17 +352,43 @@ function FileTreeNode({
   workspaceId,
   selectedPath,
   onSelect,
-  onDeleteRequest,
+  onContextAction,
   depth = 0,
 }: FileTreeNodeProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
   const isSelected = selectedPath === entry.path;
 
   const handleContextMenu = (e: MouseEvent) => {
-    if (entry.isDirectory) return;
     e.preventDefault();
-    onDeleteRequest(entry.path);
+    setShowMenu((v) => !v);
   };
+
+  const contextMenu = showMenu ? (
+    <div className="flex items-center gap-1 py-0.5" style={{ paddingLeft: `${depth * 14 + (entry.isDirectory ? 8 : 23) + 8}px` }}>
+      <button
+        type="button"
+        className="rounded border border-input bg-background px-1.5 py-0.5 text-[10px] text-foreground hover:bg-accent"
+        onClick={() => { setShowMenu(false); onContextAction({ path: entry.path, isDirectory: entry.isDirectory, type: "rename" }); }}
+      >
+        Rename
+      </button>
+      <button
+        type="button"
+        className="rounded border border-destructive/50 bg-background px-1.5 py-0.5 text-[10px] text-destructive hover:bg-destructive/10"
+        onClick={() => { setShowMenu(false); onContextAction({ path: entry.path, isDirectory: entry.isDirectory, type: "delete" }); }}
+      >
+        Delete
+      </button>
+      <button
+        type="button"
+        className="rounded border border-input bg-background px-1 py-0.5 text-[10px] text-muted-foreground hover:bg-accent"
+        onClick={() => setShowMenu(false)}
+      >
+        ×
+      </button>
+    </div>
+  ) : null;
 
   if (entry.isDirectory) {
     return (
@@ -312,11 +398,13 @@ function FileTreeNode({
           className="flex w-full items-center gap-2 rounded-none px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent/60"
           style={{ paddingLeft: `${depth * 14 + 8}px` }}
           onClick={() => setIsExpanded((v) => !v)}
+          onContextMenu={handleContextMenu}
           aria-expanded={isExpanded}
         >
           <span className="w-3 text-xs text-muted-foreground">{isExpanded ? "\u25BE" : "\u25B8"}</span>
           <span className="truncate font-medium">{entry.name}</span>
         </button>
+        {contextMenu}
         {isExpanded ? (
           <ExpandedDirectoryChildren
             directoryPath={entry.path}
@@ -325,7 +413,7 @@ function FileTreeNode({
             workspaceId={workspaceId}
             selectedPath={selectedPath}
             onSelect={onSelect}
-            onDeleteRequest={onDeleteRequest}
+            onContextAction={onContextAction}
             depth={depth}
           />
         ) : null}
@@ -346,6 +434,7 @@ function FileTreeNode({
       >
         <span className="min-w-0 flex-1 truncate">{entry.name}</span>
       </button>
+      {contextMenu}
     </li>
   );
 }
@@ -357,7 +446,7 @@ function ExpandedDirectoryChildren({
   workspaceId,
   selectedPath,
   onSelect,
-  onDeleteRequest,
+  onContextAction,
   depth,
 }: {
   directoryPath: string;
@@ -366,7 +455,7 @@ function ExpandedDirectoryChildren({
   workspaceId: string;
   selectedPath: string | null;
   onSelect: (path: string) => void;
-  onDeleteRequest: (path: string) => void;
+  onContextAction: (action: ContextAction) => void;
   depth: number;
 }) {
   const { data: childData } = usePluginData<{ entries: FileEntry[] }>("fileList", {
@@ -389,7 +478,7 @@ function ExpandedDirectoryChildren({
           workspaceId={workspaceId}
           selectedPath={selectedPath}
           onSelect={onSelect}
-          onDeleteRequest={onDeleteRequest}
+          onContextAction={onContextAction}
           depth={depth + 1}
         />
       ))}
@@ -523,6 +612,8 @@ export function FilesTab({ context }: PluginDetailTabProps) {
   const writeFile = usePluginAction("writeFile");
   const createFile = usePluginAction("createFile");
   const deleteFile = usePluginAction("deleteFile");
+  const deleteDirectory = usePluginAction("deleteDirectory");
+  const renameAction = usePluginAction("rename");
 
   // Editor state
   const editorRef = useRef<HTMLDivElement | null>(null);
@@ -538,8 +629,12 @@ export function FilesTab({ context }: PluginDetailTabProps) {
   const [newFileError, setNewFileError] = useState<string | null>(null);
 
   // Delete state
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ path: string; isDirectory: boolean } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Rename state
+  const [renameTarget, setRenameTarget] = useState<{ path: string; isDirectory: boolean } | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   // Set up CodeMirror
   useEffect(() => {
@@ -622,12 +717,16 @@ export function FilesTab({ context }: PluginDetailTabProps) {
     }
   }, [selectedWorkspace, projectId, companyId, createFile, refreshFileList]);
 
-  const handleDeleteFile = useCallback(async () => {
+  const handleDelete = useCallback(async () => {
     if (!selectedWorkspace || !deleteTarget) return;
     setDeleteError(null);
     try {
-      await deleteFile({ projectId, companyId, workspaceId: selectedWorkspace.id, filePath: deleteTarget });
-      if (selectedPath === deleteTarget) {
+      if (deleteTarget.isDirectory) {
+        await deleteDirectory({ projectId, companyId, workspaceId: selectedWorkspace.id, dirPath: deleteTarget.path });
+      } else {
+        await deleteFile({ projectId, companyId, workspaceId: selectedWorkspace.id, filePath: deleteTarget.path });
+      }
+      if (selectedPath === deleteTarget.path || (deleteTarget.isDirectory && selectedPath?.startsWith(deleteTarget.path + "/"))) {
         setSelectedPath(null);
       }
       setDeleteTarget(null);
@@ -635,7 +734,22 @@ export function FilesTab({ context }: PluginDetailTabProps) {
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : String(error));
     }
-  }, [selectedWorkspace, deleteTarget, selectedPath, projectId, companyId, deleteFile, refreshFileList]);
+  }, [selectedWorkspace, deleteTarget, selectedPath, projectId, companyId, deleteFile, deleteDirectory, refreshFileList]);
+
+  const handleRename = useCallback(async (newName: string) => {
+    if (!selectedWorkspace || !renameTarget) return;
+    setRenameError(null);
+    try {
+      const result = await renameAction({ projectId, companyId, workspaceId: selectedWorkspace.id, oldPath: renameTarget.path, newName }) as { newPath?: string };
+      if (selectedPath === renameTarget.path && result?.newPath) {
+        setSelectedPath(result.newPath);
+      }
+      setRenameTarget(null);
+      refreshFileList();
+    } catch (error) {
+      setRenameError(error instanceof Error ? error.message : String(error));
+    }
+  }, [selectedWorkspace, renameTarget, selectedPath, projectId, companyId, renameAction, refreshFileList]);
 
   return (
     <div className="space-y-4">
@@ -729,9 +843,14 @@ export function FilesTab({ context }: PluginDetailTabProps) {
                         setSelectedPath(path);
                         setMobileView("editor");
                       }}
-                      onDeleteRequest={(path) => {
-                        setDeleteTarget(path);
-                        setDeleteError(null);
+                      onContextAction={(action) => {
+                        if (action.type === "delete") {
+                          setDeleteTarget({ path: action.path, isDirectory: action.isDirectory });
+                          setDeleteError(null);
+                        } else if (action.type === "rename") {
+                          setRenameTarget({ path: action.path, isDirectory: action.isDirectory });
+                          setRenameError(null);
+                        }
                       }}
                     />
                   ))}
@@ -765,17 +884,30 @@ export function FilesTab({ context }: PluginDetailTabProps) {
             </div>
             <div className="flex items-center gap-2">
               {selectedPath ? (
-                <button
-                  type="button"
-                  className="rounded-md border border-destructive/50 bg-background px-3 py-1.5 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={() => {
-                    setDeleteTarget(selectedPath);
-                    setDeleteError(null);
-                  }}
-                  title="Delete this file"
-                >
-                  Delete
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => {
+                      setRenameTarget({ path: selectedPath, isDirectory: false });
+                      setRenameError(null);
+                    }}
+                    title="Rename this file"
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-destructive/50 bg-background px-3 py-1.5 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => {
+                      setDeleteTarget({ path: selectedPath, isDirectory: false });
+                      setDeleteError(null);
+                    }}
+                    title="Delete this file"
+                  >
+                    Delete
+                  </button>
+                </>
               ) : null}
               <button
                 type="button"

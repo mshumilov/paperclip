@@ -4,7 +4,7 @@ import {
   JOB_KEY,
   STATE_LAST_RUNS,
   STATE_RUN_HISTORY,
-  mergeRunHistory,
+  appendRunHistoryEntries,
   parseLastRunsMap,
   parseRunHistory,
   parseSchedulerConfig,
@@ -43,19 +43,25 @@ async function loadLastRunsMap(ctx: PluginContext): Promise<Record<string, strin
   return parseLastRunsMap(raw);
 }
 
-/** Re-read + merge + write to reduce lost updates if state races with another writer. */
-async function appendRunHistoryEntry(ctx: PluginContext, entry: SchedulerRunLogEntry): Promise<void> {
+/**
+ * Persist all run log rows for one host job in a single read-merge-write.
+ * Avoids losing task B's row when task A wrote run-history a few ms earlier in the same tick.
+ */
+async function flushRunHistoryBatch(ctx: PluginContext, entries: SchedulerRunLogEntry[]): Promise<void> {
+  if (entries.length === 0) return;
   const historyKey = { scopeKind: "instance" as const, stateKey: STATE_RUN_HISTORY };
-  for (let attempt = 0; attempt < 8; attempt += 1) {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
     const prev = await ctx.state.get(historyKey);
-    const next = mergeRunHistory(prev, entry);
+    const next = appendRunHistoryEntries(prev, entries);
     await ctx.state.set(historyKey, next);
     const verify = parseRunHistory(await ctx.state.get(historyKey));
-    if (verify.some((r) => r.id === entry.id)) {
+    if (entries.every((e) => verify.some((r) => r.id === e.id))) {
       return;
     }
   }
-  ctx.logger.warn("run-history: could not verify append after retries", { entryId: entry.id });
+  ctx.logger.warn("run-history: batch flush could not verify after retries", {
+    ids: entries.map((e) => e.id),
+  });
 }
 
 async function runOneTask(
@@ -63,7 +69,7 @@ async function runOneTask(
   job: PluginJobContext,
   task: SchedulerTask,
   nowMs: number,
-): Promise<void> {
+): Promise<SchedulerRunLogEntry> {
   const workspaces = await ctx.projects.listWorkspaces(task.projectId, task.companyId);
   const workspace = pickWorkspace(workspaces, task.workspaceName);
   if (!workspace) {
@@ -133,13 +139,8 @@ async function runOneTask(
     taskId: task.id,
     taskLabel: task.label || undefined,
   };
-  await appendRunHistoryEntry(ctx, entry);
 
-  if (code !== 0) {
-    throw new Error(stderr || stdout || `Command exited with code ${code ?? "null"}`);
-  }
-
-  if (job.trigger === "schedule") {
+  if (code === 0 && job.trigger === "schedule") {
     const lastRunsKey = { scopeKind: "instance" as const, stateKey: STATE_LAST_RUNS };
     const prevMapRaw = await ctx.state.get(lastRunsKey);
     const prevMap = parseLastRunsMap(prevMapRaw);
@@ -148,6 +149,8 @@ async function runOneTask(
       [task.id]: new Date(nowMs).toISOString(),
     });
   }
+
+  return entry;
 }
 
 async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): Promise<void> {
@@ -164,6 +167,7 @@ async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): P
   const errors: string[] = [];
   let ranAny = false;
   let succeededAny = false;
+  const historyBatch: SchedulerRunLogEntry[] = [];
 
   for (const task of config.tasks) {
     if (!task.companyId || !task.projectId || !task.command) {
@@ -183,11 +187,16 @@ async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): P
     }
 
     try {
-      await runOneTask(ctx, job, task, now);
-      ranAny = true;
-      succeededAny = true;
-      if (job.trigger === "schedule") {
-        lastRuns = { ...lastRuns, [task.id]: new Date(now).toISOString() };
+      const entry = await runOneTask(ctx, job, task, now);
+      historyBatch.push(entry);
+      if (entry.ok) {
+        ranAny = true;
+        succeededAny = true;
+      } else {
+        ranAny = true;
+        const hint =
+          entry.stderrTail?.trim() || entry.stdoutTail?.trim() || entry.summary;
+        errors.push(`${task.label || task.id}: ${hint}`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -196,8 +205,9 @@ async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): P
     }
   }
 
-  // One failing npm script must not mark the whole host job "failed" if another task succeeded
-  // (each task still logs to run-history and activity on its own).
+  await flushRunHistoryBatch(ctx, historyBatch);
+
+  // One failing npm script must not mark the whole host job "failed" if another task succeeded.
   if (errors.length > 0 && !succeededAny) {
     throw new Error(errors.join(" | "));
   }

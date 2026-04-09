@@ -152,6 +152,16 @@ export function mergeRunHistory(
   return [...prev, entry].slice(-MAX_RUN_HISTORY);
 }
 
+/** Append many entries in one merge (used by the worker once per job run to avoid RMW races). */
+export function appendRunHistoryEntries(
+  previous: unknown,
+  entries: SchedulerRunLogEntry[],
+): SchedulerRunLogEntry[] {
+  if (entries.length === 0) return parseRunHistory(previous);
+  const prev = parseRunHistory(previous);
+  return [...prev, ...entries].slice(-MAX_RUN_HISTORY);
+}
+
 export function pickWorkspace(workspaces: PluginWorkspace[], name: string): PluginWorkspace | null {
   if (workspaces.length === 0) return null;
   if (!name) {

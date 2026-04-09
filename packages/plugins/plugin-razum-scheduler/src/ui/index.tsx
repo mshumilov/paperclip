@@ -133,6 +133,26 @@ function timeAgo(iso: string): string {
   return `${Math.floor(sec / 86400)}d ago`;
 }
 
+function firstNonEmptyLine(text: string, maxLen: number): string {
+  const line =
+    text
+      .trim()
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.length > 0) ?? "";
+  if (line.length <= maxLen) return line;
+  return `${line.slice(0, maxLen)}…`;
+}
+
+/** Short hint for failed runs (full stderr/stdout stays in the expandable block). */
+function runFailureHint(run: RunHistoryData["runs"][number]): string | null {
+  if (run.ok) return null;
+  if (run.stderrTail?.trim()) return firstNonEmptyLine(run.stderrTail, 500);
+  if (run.stdoutTail?.trim()) return firstNonEmptyLine(run.stdoutTail, 500);
+  if (run.exitCode === null) return "The process failed before reporting an exit code.";
+  return `Non-zero exit code ${run.exitCode} (no stderr/stdout captured).`;
+}
+
 function useInstanceConfigForm() {
   const [configJson, setConfigJson] = useState<Record<string, unknown>>(() => defaultTasksConfig());
   const [loading, setLoading] = useState(true);
@@ -220,6 +240,7 @@ export function DashboardWidget(_props: PluginWidgetProps) {
 function RunLogRow({ run, nested }: { run: RunHistoryData["runs"][number]; nested?: boolean }) {
   const { stdoutTail, stderrTail } = run;
   const hasOutput = Boolean(stdoutTail || stderrTail);
+  const failureHint = runFailureHint(run);
   const pad = nested ? "8px 0 8px 12px" : "10px 14px";
   const borderBottom = nested
     ? "1px solid color-mix(in srgb, var(--border, #444) 55%, transparent)"
@@ -279,6 +300,25 @@ function RunLogRow({ run, nested }: { run: RunHistoryData["runs"][number]; neste
               ({run.trigger})
             </span>
           </div>
+          {failureHint ? (
+            <div
+              style={{
+                marginTop: "8px",
+                padding: "8px 10px",
+                borderRadius: "8px",
+                fontSize: "12px",
+                lineHeight: 1.45,
+                border: "1px solid color-mix(in srgb, var(--destructive, #b91c1c) 40%, transparent)",
+                background: "color-mix(in srgb, var(--destructive, #b91c1c) 12%, transparent)",
+                color: "var(--destructive, #fca5a5)",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              <span style={{ fontWeight: 600 }}>Error: </span>
+              {failureHint}
+            </div>
+          ) : null}
           {hasOutput ? (
             <details style={{ marginTop: "8px" }}>
               <summary

@@ -51,7 +51,7 @@ const taskItemSchema = {
 const manifest: PaperclipPluginManifestV1 = {
   id: "plugin-razum-scheduler",
   apiVersion: 1,
-  version: "0.2.6",
+  version: "0.2.8",
   displayName: "Razum scheduler",
   description:
     "Runs one or more shell commands on a timer in project workspaces. Host fires the job every minute; each task’s intervalMinutes throttles how often that command actually runs.",

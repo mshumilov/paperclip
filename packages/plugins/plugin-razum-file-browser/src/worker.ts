@@ -228,6 +228,62 @@ const plugin = definePlugin({
         return { ok: true, path: filePath };
       },
     );
+
+    ctx.actions.register(
+      "deleteDirectory",
+      async (params: Record<string, unknown>) => {
+        const projectId = params.projectId as string;
+        const companyId = typeof params.companyId === "string" ? params.companyId : "";
+        const workspaceId = params.workspaceId as string;
+        const dirPath = typeof params.dirPath === "string" ? params.dirPath.trim() : "";
+        if (!dirPath) throw new Error("dirPath must be a non-empty string");
+        if (!projectId || !companyId || !workspaceId) throw new Error("Missing workspace context");
+        const workspaces = await ctx.projects.listWorkspaces(projectId, companyId);
+        const workspace = workspaces.find((w) => w.id === workspaceId);
+        if (!workspace) throw new Error("Workspace not found");
+        const workspacePath = sanitizeWorkspacePath(workspace.path);
+        if (!workspacePath) throw new Error("Workspace has no path");
+        const fullPath = resolveWorkspace(workspacePath, dirPath);
+        if (!fullPath) throw new Error("Path outside workspace");
+        if (fullPath === path.resolve(workspacePath)) throw new Error("Cannot delete workspace root");
+        if (!fs.existsSync(fullPath)) throw new Error("Directory does not exist");
+        const stat = fs.statSync(fullPath);
+        if (!stat.isDirectory()) throw new Error("Selected path is not a directory");
+        fs.rmSync(fullPath, { recursive: true });
+        return { ok: true, path: dirPath };
+      },
+    );
+
+    ctx.actions.register(
+      "rename",
+      async (params: Record<string, unknown>) => {
+        const projectId = params.projectId as string;
+        const companyId = typeof params.companyId === "string" ? params.companyId : "";
+        const workspaceId = params.workspaceId as string;
+        const oldPath = typeof params.oldPath === "string" ? params.oldPath.trim() : "";
+        const newName = typeof params.newName === "string" ? params.newName.trim() : "";
+        if (!oldPath) throw new Error("oldPath must be a non-empty string");
+        if (!newName) throw new Error("newName must be a non-empty string");
+        if (newName.includes("/") || newName.includes("\\")) throw new Error("newName must not contain path separators");
+        if (!projectId || !companyId || !workspaceId) throw new Error("Missing workspace context");
+        const workspaces = await ctx.projects.listWorkspaces(projectId, companyId);
+        const workspace = workspaces.find((w) => w.id === workspaceId);
+        if (!workspace) throw new Error("Workspace not found");
+        const workspacePath = sanitizeWorkspacePath(workspace.path);
+        if (!workspacePath) throw new Error("Workspace has no path");
+        const fullOldPath = resolveWorkspace(workspacePath, oldPath);
+        if (!fullOldPath) throw new Error("Source path outside workspace");
+        if (!fs.existsSync(fullOldPath)) throw new Error("Source does not exist");
+        const parentDir = path.dirname(fullOldPath);
+        const fullNewPath = path.join(parentDir, newName);
+        const resolvedNew = resolveWorkspace(workspacePath, path.relative(workspacePath, fullNewPath));
+        if (!resolvedNew) throw new Error("Destination path outside workspace");
+        if (fs.existsSync(fullNewPath)) throw new Error("Destination already exists");
+        fs.renameSync(fullOldPath, fullNewPath);
+        const newRelative = path.relative(workspacePath, fullNewPath);
+        return { ok: true, oldPath, newPath: newRelative };
+      },
+    );
   },
 
   async onHealth() {
