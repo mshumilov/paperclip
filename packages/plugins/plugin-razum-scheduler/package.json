@@ -1,9 +1,9 @@
 {
   "name": "plugin-razum-scheduler",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "private": true,
-  "description": "Runs a configurable shell command on a schedule in a Paperclip project workspace (Razum scheduler).",
+  "description": "Runs one or more shell commands on a schedule in Paperclip project workspaces (Razum scheduler).",
   "scripts": {
     "prebuild": "node ../../../scripts/ensure-plugin-build-deps.mjs",
     "build": "node ./esbuild.config.mjs",

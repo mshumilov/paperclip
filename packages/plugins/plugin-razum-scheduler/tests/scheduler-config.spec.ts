@@ -4,9 +4,9 @@ import {
   parseRunHistory,
   parseSchedulerConfig,
   pickWorkspace,
-  resolveWorkingDirectory,
   shouldSkipScheduledRun,
-} from "../src/scheduler-config.js";
+} from "../src/scheduler-model.js";
+import { resolveWorkingDirectory } from "../src/scheduler-config.js";
 import type { PluginWorkspace } from "@paperclipai/plugin-sdk";
 
 function ws(partial: Partial<PluginWorkspace> & Pick<PluginWorkspace, "id" | "name" | "path">): PluginWorkspace {
@@ -20,31 +20,53 @@ function ws(partial: Partial<PluginWorkspace> & Pick<PluginWorkspace, "id" | "na
 }
 
 describe("parseSchedulerConfig", () => {
-  it("applies defaults and clamps interval", () => {
+  it("parses tasks array with trimming", () => {
     expect(
       parseSchedulerConfig({
-        companyId: " c1 ",
-        projectId: "p1",
-        command: " npm run x ",
+        tasks: [
+          {
+            id: "a",
+            companyId: " c1 ",
+            projectId: "p1",
+            command: " npm run x ",
+            intervalMinutes: 2,
+          },
+        ],
       }),
     ).toEqual({
-      companyId: "c1",
-      projectId: "p1",
-      workspaceName: "",
-      command: "npm run x",
-      intervalMinutes: 1,
-      cwdSubdir: "",
+      tasks: [
+        {
+          id: "a",
+          label: "",
+          companyId: "c1",
+          projectId: "p1",
+          workspaceName: "",
+          command: "npm run x",
+          intervalMinutes: 2,
+          cwdSubdir: "",
+        },
+      ],
     });
+  });
+
+  it("returns empty tasks when tasks missing or empty", () => {
+    expect(parseSchedulerConfig({})).toEqual({ tasks: [] });
+    expect(parseSchedulerConfig({ tasks: [] })).toEqual({ tasks: [] });
   });
 
   it("clamps huge interval to one week in minutes", () => {
     const c = parseSchedulerConfig({
-      companyId: "c1",
-      projectId: "p1",
-      command: "true",
-      intervalMinutes: 999999,
+      tasks: [
+        {
+          id: "x",
+          companyId: "c1",
+          projectId: "p1",
+          command: "true",
+          intervalMinutes: 999999,
+        },
+      ],
     });
-    expect(c.intervalMinutes).toBe(7 * 24 * 60);
+    expect(c.tasks[0]?.intervalMinutes).toBe(7 * 24 * 60);
   });
 });
 

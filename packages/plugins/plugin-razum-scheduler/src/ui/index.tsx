@@ -11,6 +11,12 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import {
+  MAX_TASKS,
+  emptySchedulerTask,
+  parseSchedulerConfig,
+  type SchedulerTask,
+} from "../scheduler-model.js";
 
 /** Must match `manifest.id` — used for `/api/plugins/:id/config` resolution by key. */
 const PLUGIN_INSTANCE_KEY = "plugin-razum-scheduler";
@@ -35,6 +41,7 @@ function hostFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 type HealthData = {
   status: "ok";
   hasTarget: boolean;
+  taskCount?: number;
   intervalMinutes: number;
   checkedAt: string;
 };
@@ -50,6 +57,8 @@ type RunHistoryData = {
     summary: string;
     stdoutTail: string;
     stderrTail: string;
+    taskId?: string;
+    taskLabel?: string;
   }>;
 };
 
@@ -230,14 +239,21 @@ function HostJobRunRow({ run }: { run: PluginDashboardRecentJobRun }) {
   );
 }
 
-const defaultConfig: Record<string, unknown> = {
-  companyId: "",
-  projectId: "",
-  workspaceName: "",
-  cwdSubdir: "",
-  command: "npm run sync-incoming",
-  intervalMinutes: 1,
-};
+function newTaskId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `task-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function defaultTasksConfig(): Record<string, unknown> {
+  return { tasks: [emptySchedulerTask(newTaskId())] };
+}
+
+/** Server config is only `tasks[]`; empty / invalid → one blank row for the editor. */
+function configFromServer(raw: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const merged = { ...(raw ?? {}) } as Record<string, unknown>;
+  const { tasks } = parseSchedulerConfig(merged);
+  if (tasks.length === 0) return defaultTasksConfig();
+  return { tasks: tasks.map((t) => ({ ...t })) };
+}
 
 function timeAgo(iso: string): string {
   const t = Date.parse(iso);
@@ -250,7 +266,7 @@ function timeAgo(iso: string): string {
 }
 
 function useInstanceConfigForm() {
-  const [configJson, setConfigJson] = useState<Record<string, unknown>>({ ...defaultConfig });
+  const [configJson, setConfigJson] = useState<Record<string, unknown>>(() => defaultTasksConfig());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -263,7 +279,7 @@ function useInstanceConfigForm() {
     )
       .then((result) => {
         if (cancelled) return;
-        setConfigJson({ ...defaultConfig, ...(result?.configJson ?? {}) });
+        setConfigJson(configFromServer(result?.configJson ?? undefined));
         setError(null);
       })
       .catch((nextError) => {
@@ -323,8 +339,11 @@ export function DashboardWidget(_props: PluginWidgetProps) {
     <div style={{ display: "grid", gap: "0.35rem", fontSize: "0.9rem" }}>
       <strong>Razum scheduler</strong>
       <div>Status: {data?.status ?? "unknown"}</div>
-      <div>Configured: {data?.hasTarget ? "yes" : "no (set company, project, command)"}</div>
-      <div>Interval: {data?.intervalMinutes ?? "—"} min (scheduled runs only)</div>
+      <div>
+        Tasks: {data?.taskCount ?? (data?.hasTarget ? 1 : 0)} configured
+        {!data?.hasTarget ? " — set company, project, and command per task" : ""}
+      </div>
+      <div>Shortest interval: {data?.intervalMinutes ?? "—"} min (per-task throttle)</div>
       <div style={{ opacity: 0.75 }}>Checked: {data?.checkedAt ?? "—"}</div>
     </div>
   );
@@ -367,6 +386,18 @@ function RunLogRow({ run }: { run: RunHistoryData["runs"][number] }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ lineHeight: 1.35 }}>
             <strong style={{ color: "var(--foreground, #eee)" }}>System</strong>
+            {run.taskLabel || run.taskId ? (
+              <span
+                style={{
+                  color: "var(--muted-foreground, #9ca3af)",
+                  marginLeft: "6px",
+                  fontSize: "11px",
+                  fontFamily: "ui-monospace, monospace",
+                }}
+              >
+                [{run.taskLabel || run.taskId}]
+              </span>
+            ) : null}
             <span style={{ color: "var(--muted-foreground, #9ca3af)", marginLeft: "6px" }}>
               plugin-razum-scheduler: {run.summary}
             </span>
@@ -472,6 +503,9 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
     usePluginData<RunHistoryData>("run-history");
   const hostDash = useHostPluginDashboard(tab === "hostJobs");
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  const tasks = (Array.isArray(configJson.tasks) ? configJson.tasks : []) as SchedulerTask[];
 
   useEffect(() => {
     if (tab !== "output") return;
@@ -482,13 +516,44 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
     return () => window.clearInterval(t);
   }, [tab, refresh]);
 
-  function setField(key: string, value: unknown) {
-    setConfigJson((c) => ({ ...c, [key]: value }));
+  function setTaskField(index: number, patch: Partial<SchedulerTask>) {
+    setConfigJson((c) => {
+      const list = [...((c.tasks as SchedulerTask[]) ?? [])];
+      const cur = list[index] ?? emptySchedulerTask(newTaskId());
+      list[index] = { ...cur, ...patch };
+      return { tasks: list };
+    });
+  }
+
+  function addTask() {
+    setConfigJson((c) => {
+      const list = [...((c.tasks as SchedulerTask[]) ?? [])];
+      if (list.length >= MAX_TASKS) return c;
+      list.push(emptySchedulerTask(newTaskId()));
+      return { tasks: list };
+    });
+  }
+
+  function removeTask(index: number) {
+    setConfigJson((c) => {
+      const list = [...((c.tasks as SchedulerTask[]) ?? [])];
+      if (list.length <= 1) return c;
+      list.splice(index, 1);
+      return { tasks: list };
+    });
   }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    await save(configJson);
+    setValidationError(null);
+    for (let i = 0; i < tasks.length; i += 1) {
+      const t = tasks[i];
+      if (!t.companyId?.trim() || !t.projectId?.trim() || !t.command?.trim()) {
+        setValidationError(`Task ${i + 1}: fill company, project, and command (or remove the row).`);
+        return;
+      }
+    }
+    await save({ tasks });
     setSavedMsg("Saved");
     window.setTimeout(() => setSavedMsg(null), 2000);
   }
@@ -513,9 +578,9 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
         ) : (
           <form onSubmit={(e) => void onSubmit(e)} style={{ display: "grid", gap: "18px" }}>
             <div>
-              <h3 style={sectionTitle}>Scheduler configuration</h3>
+              <h3 style={sectionTitle}>Scheduler tasks</h3>
               <p style={{ fontSize: "12px", opacity: 0.75, margin: 0 }}>
-                Company context: {context.companyId ?? "none"} — you can paste the same company UUID below.
+                Board company context: {context.companyId ?? "none"} — you can paste the same UUID into each task.
               </p>
             </div>
 
@@ -533,73 +598,159 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
               </div>
             ) : null}
 
-            <label style={labelStyle}>
-              Company ID
-              <input
-                style={inputStyle}
-                value={String(configJson.companyId ?? "")}
-                onChange={(e) => setField("companyId", e.target.value)}
-                placeholder="UUID"
-                autoComplete="off"
-              />
-            </label>
+            {validationError ? (
+              <div
+                style={{
+                  fontSize: "13px",
+                  padding: "10px 12px",
+                  borderRadius: "8px",
+                  border: "1px solid color-mix(in srgb, var(--destructive, #b91c1c) 40%, transparent)",
+                  color: "var(--destructive, #fca5a5)",
+                }}
+              >
+                {validationError}
+              </div>
+            ) : null}
 
-            <label style={labelStyle}>
-              Project ID
-              <input
-                style={inputStyle}
-                value={String(configJson.projectId ?? "")}
-                onChange={(e) => setField("projectId", e.target.value)}
-                placeholder="UUID"
-                autoComplete="off"
-              />
-            </label>
+            {tasks.map((task, index) => (
+              <fieldset
+                key={task.id}
+                style={{
+                  margin: 0,
+                  padding: "14px 16px",
+                  borderRadius: "10px",
+                  border: "1px solid color-mix(in srgb, var(--border, #444) 90%, transparent)",
+                  display: "grid",
+                  gap: "14px",
+                }}
+              >
+                <legend style={{ padding: "0 8px", fontSize: "13px", fontWeight: 600 }}>
+                  Task {index + 1}
+                  <span style={{ fontWeight: 400, opacity: 0.65, marginLeft: "8px", fontFamily: "ui-monospace, monospace" }}>
+                    ({task.id})
+                  </span>
+                </legend>
 
-            <label style={labelStyle}>
-              Workspace name
-              <input
-                style={inputStyle}
-                value={String(configJson.workspaceName ?? "")}
-                onChange={(e) => setField("workspaceName", e.target.value)}
-                placeholder="Empty = primary workspace"
-                autoComplete="off"
-              />
-              <span style={helpStyle}>Optional; must match a workspace display name on the project.</span>
-            </label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" }}>
+                  {tasks.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => removeTask(index)}
+                      style={{
+                        padding: "6px 12px",
+                        borderRadius: "8px",
+                        border: "1px solid color-mix(in srgb, var(--destructive, #b91c1c) 50%, transparent)",
+                        background: "transparent",
+                        color: "var(--destructive, #fca5a5)",
+                        fontSize: "12px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Remove task
+                    </button>
+                  ) : null}
+                </div>
 
-            <label style={labelStyle}>
-              Subdirectory (under workspace)
-              <input
-                style={inputStyle}
-                value={String(configJson.cwdSubdir ?? "")}
-                onChange={(e) => setField("cwdSubdir", e.target.value)}
-                placeholder="e.g. packages/app"
-                autoComplete="off"
-              />
-            </label>
+                <label style={labelStyle}>
+                  Label (optional)
+                  <input
+                    style={inputStyle}
+                    value={task.label}
+                    onChange={(e) => setTaskField(index, { label: e.target.value })}
+                    placeholder="e.g. YouGile sync"
+                    autoComplete="off"
+                  />
+                </label>
 
-            <label style={labelStyle}>
-              Command
-              <input
-                style={inputStyle}
-                value={String(configJson.command ?? "")}
-                onChange={(e) => setField("command", e.target.value)}
-                placeholder="npm run sync-incoming"
-                autoComplete="off"
-              />
-            </label>
+                <label style={labelStyle}>
+                  Company ID
+                  <input
+                    style={inputStyle}
+                    value={task.companyId}
+                    onChange={(e) => setTaskField(index, { companyId: e.target.value })}
+                    placeholder="UUID"
+                    autoComplete="off"
+                  />
+                </label>
 
-            <label style={labelStyle}>
-              Min. interval (minutes, scheduled runs only)
-              <input
-                type="number"
-                min={1}
-                max={10080}
-                style={inputStyle}
-                value={Number(configJson.intervalMinutes ?? 1)}
-                onChange={(e) => setField("intervalMinutes", Number(e.target.value))}
-              />
-            </label>
+                <label style={labelStyle}>
+                  Project ID
+                  <input
+                    style={inputStyle}
+                    value={task.projectId}
+                    onChange={(e) => setTaskField(index, { projectId: e.target.value })}
+                    placeholder="UUID"
+                    autoComplete="off"
+                  />
+                </label>
+
+                <label style={labelStyle}>
+                  Workspace name
+                  <input
+                    style={inputStyle}
+                    value={task.workspaceName}
+                    onChange={(e) => setTaskField(index, { workspaceName: e.target.value })}
+                    placeholder="Empty = primary workspace"
+                    autoComplete="off"
+                  />
+                  <span style={helpStyle}>Optional; must match a workspace display name on the project.</span>
+                </label>
+
+                <label style={labelStyle}>
+                  Subdirectory (under workspace)
+                  <input
+                    style={inputStyle}
+                    value={task.cwdSubdir}
+                    onChange={(e) => setTaskField(index, { cwdSubdir: e.target.value })}
+                    placeholder="e.g. packages/app"
+                    autoComplete="off"
+                  />
+                </label>
+
+                <label style={labelStyle}>
+                  Command
+                  <input
+                    style={inputStyle}
+                    value={task.command}
+                    onChange={(e) => setTaskField(index, { command: e.target.value })}
+                    placeholder="npm run sync-incoming"
+                    autoComplete="off"
+                  />
+                </label>
+
+                <label style={labelStyle}>
+                  Min. interval (minutes, scheduled runs only)
+                  <input
+                    type="number"
+                    min={1}
+                    max={10080}
+                    style={inputStyle}
+                    value={task.intervalMinutes}
+                    onChange={(e) => setTaskField(index, { intervalMinutes: Number(e.target.value) })}
+                  />
+                </label>
+              </fieldset>
+            ))}
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "center" }}>
+              <button
+                type="button"
+                disabled={tasks.length >= MAX_TASKS}
+                onClick={() => addTask()}
+                style={{
+                  padding: "8px 16px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border, #444)",
+                  background: "transparent",
+                  color: "var(--foreground, #eee)",
+                  fontSize: "13px",
+                  cursor: tasks.length >= MAX_TASKS ? "not-allowed" : "pointer",
+                  opacity: tasks.length >= MAX_TASKS ? 0.5 : 1,
+                }}
+              >
+                Add task ({tasks.length}/{MAX_TASKS})
+              </button>
+            </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
               <button
