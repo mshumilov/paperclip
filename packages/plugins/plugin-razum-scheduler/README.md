@@ -11,6 +11,8 @@ Paperclip plugin: run **any shell command** on a repeating schedule inside a **p
 
 ## Settings
 
+Configuration and a local **execution log** (command stdout/stderr tails, expandable per run) live on the plugin’s **Settings** screen in the board: **Instance → Settings → Plugins → Razum scheduler → gear**. That UI replaces the default JSON-schema form via a `settingsPage` slot.
+
 | Field | Meaning |
 |-------|--------|
 | Company ID / Project ID | Scope the workspace list. |

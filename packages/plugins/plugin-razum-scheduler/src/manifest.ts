@@ -19,6 +19,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "plugin.state.read",
     "plugin.state.write",
     "activity.log.write",
+    "instance.settings.register",
     "ui.dashboardWidget.register",
   ],
   entrypoints: {
@@ -78,6 +79,12 @@ const manifest: PaperclipPluginManifestV1 = {
   ],
   ui: {
     slots: [
+      {
+        type: "settingsPage",
+        id: "razum-scheduler-settings",
+        displayName: "Razum scheduler",
+        exportName: "SchedulerSettingsPage",
+      },
       {
         type: "dashboardWidget",
         id: "razum-scheduler-health",

@@ -3,10 +3,14 @@ import { definePlugin, runWorker, type PluginContext, type PluginJobContext } fr
 import {
   JOB_KEY,
   STATE_LAST_RUN,
+  STATE_RUN_HISTORY,
+  mergeRunHistory,
+  parseRunHistory,
   parseSchedulerConfig,
   pickWorkspace,
   resolveWorkingDirectory,
   shouldSkipScheduledRun,
+  type SchedulerRunLogEntry,
 } from "./scheduler-config.js";
 
 function runShellCommand(cwd: string, command: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
@@ -72,7 +76,22 @@ async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): P
     commandPreview: config.command.length > 120 ? `${config.command.slice(0, 120)}…` : config.command,
   });
 
-  const { code, stdout, stderr } = await runShellCommand(cwd, config.command);
+  let code: number | null;
+  let stdout: string;
+  let stderr: string;
+  try {
+    const r = await runShellCommand(cwd, config.command);
+    code = r.code;
+    stdout = r.stdout;
+    stderr = r.stderr;
+  } catch (err) {
+    code = null;
+    stdout = "";
+    stderr = err instanceof Error ? err.message : String(err);
+  }
+
+  const stdoutTail = stdout.length > 4000 ? `${stdout.slice(0, 4000)}…` : stdout;
+  const stderrTail = stderr.length > 2000 ? `${stderr.slice(0, 2000)}…` : stderr;
 
   await ctx.activity.log({
     companyId: config.companyId,
@@ -87,10 +106,28 @@ async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): P
       jobKey: job.jobKey,
       cwd,
       exitCode: code,
-      stdoutTail: stdout.length > 4000 ? `${stdout.slice(0, 4000)}…` : stdout,
-      stderrTail: stderr.length > 2000 ? `${stderr.slice(0, 2000)}…` : stderr,
+      stdoutTail,
+      stderrTail,
     },
   });
+
+  const historyKey = { scopeKind: "instance" as const, stateKey: STATE_RUN_HISTORY };
+  const prevHistory = await ctx.state.get(historyKey);
+  const entry: SchedulerRunLogEntry = {
+    id: job.runId,
+    at: new Date().toISOString(),
+    trigger: job.trigger,
+    ok: code === 0,
+    exitCode: code,
+    cwd,
+    summary:
+      code === 0
+        ? `command succeeded (exit ${code})`
+        : `command failed (exit ${code ?? "null"})`,
+    stdoutTail,
+    stderrTail,
+  };
+  await ctx.state.set(historyKey, mergeRunHistory(prevHistory, entry));
 
   if (code !== 0) {
     throw new Error(stderr || stdout || `Command exited with code ${code ?? "null"}`);
@@ -115,6 +152,12 @@ const plugin = definePlugin({
         intervalMinutes: c.intervalMinutes,
         checkedAt: new Date().toISOString(),
       };
+    });
+
+    ctx.data.register("run-history", async () => {
+      const raw = await ctx.state.get({ scopeKind: "instance", stateKey: STATE_RUN_HISTORY });
+      const runs = parseRunHistory(raw);
+      return { runs: [...runs].reverse() };
     });
   },
 

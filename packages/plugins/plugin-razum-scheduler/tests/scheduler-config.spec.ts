@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  mergeRunHistory,
+  parseRunHistory,
   parseSchedulerConfig,
   pickWorkspace,
   resolveWorkingDirectory,
@@ -68,6 +70,33 @@ describe("resolveWorkingDirectory", () => {
 
   it("allows nested dir", () => {
     expect(resolveWorkingDirectory("/repo", "packages/foo")).toMatch(/packages[/\\]foo$/);
+  });
+});
+
+describe("parseRunHistory / mergeRunHistory", () => {
+  const entry = {
+    id: "r1",
+    at: "2026-01-01T00:00:00.000Z",
+    trigger: "schedule",
+    ok: true,
+    exitCode: 0,
+    cwd: "/tmp/ws",
+    summary: "command succeeded (exit 0)",
+    stdoutTail: "hi",
+    stderrTail: "",
+  };
+
+  it("parses JSON string", () => {
+    expect(parseRunHistory(JSON.stringify([entry]))).toEqual([entry]);
+  });
+
+  it("merges and trims length", () => {
+    let acc: unknown = [];
+    for (let i = 0; i < 105; i += 1) {
+      acc = mergeRunHistory(acc, { ...entry, id: `id-${i}` });
+    }
+    expect(parseRunHistory(acc)).toHaveLength(100);
+    expect(parseRunHistory(acc)[99].id).toBe("id-104");
   });
 });
 

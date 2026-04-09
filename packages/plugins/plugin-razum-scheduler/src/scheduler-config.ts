@@ -4,6 +4,61 @@ import type { PluginWorkspace } from "@paperclipai/plugin-sdk";
 /** Declared under the same value in `manifest.ts` as `MANIFEST_JOB_KEY`. */
 export const JOB_KEY = "workspace-command";
 export const STATE_LAST_RUN = "last-scheduled-run-at";
+/** JSON array of {@link SchedulerRunLogEntry} (newest appended; worker trims). */
+export const STATE_RUN_HISTORY = "run-history";
+
+const MAX_RUN_HISTORY = 100;
+
+export interface SchedulerRunLogEntry {
+  id: string;
+  at: string;
+  trigger: string;
+  ok: boolean;
+  exitCode: number | null;
+  cwd: string;
+  /** Short status line for the list row (like activity message). */
+  summary: string;
+  stdoutTail: string;
+  stderrTail: string;
+}
+
+export function parseRunHistory(raw: unknown): SchedulerRunLogEntry[] {
+  if (raw == null) return [];
+  let list: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      list = JSON.parse(raw) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(list)) return [];
+  return list.filter(isRunLogEntry);
+}
+
+function isRunLogEntry(x: unknown): x is SchedulerRunLogEntry {
+  if (typeof x !== "object" || x === null) return false;
+  const o = x as Record<string, unknown>;
+  return (
+    typeof o.id === "string" &&
+    typeof o.at === "string" &&
+    typeof o.trigger === "string" &&
+    typeof o.ok === "boolean" &&
+    (o.exitCode === null || typeof o.exitCode === "number") &&
+    typeof o.cwd === "string" &&
+    typeof o.summary === "string" &&
+    typeof o.stdoutTail === "string" &&
+    typeof o.stderrTail === "string"
+  );
+}
+
+export function mergeRunHistory(
+  previous: unknown,
+  entry: SchedulerRunLogEntry,
+): SchedulerRunLogEntry[] {
+  const prev = parseRunHistory(previous);
+  return [...prev, entry].slice(-MAX_RUN_HISTORY);
+}
 
 export interface SchedulerConfig {
   companyId: string;
