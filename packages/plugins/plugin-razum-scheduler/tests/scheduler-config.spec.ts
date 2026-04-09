@@ -143,4 +143,67 @@ describe("shouldSkipScheduledRun", () => {
     const last = new Date(t0 - 30_000).toISOString();
     expect(shouldSkipScheduledRun(last, 1, t0)).toBe(false);
   });
+
+  it("does not skip when now is not after last (clock skew)", () => {
+    const last = new Date(t0 + 60_000).toISOString();
+    expect(shouldSkipScheduledRun(last, 5, t0)).toBe(false);
+  });
+});
+
+/**
+ * Simulates the host calling the scheduled job every `tickMs` (default 60s).
+ * When `shouldSkipScheduledRun` is false, we "run" the command and set `last` to this tick’s time
+ * (same idea as the worker updating last-success after a run).
+ */
+function simulateMinuteCadence(
+  startMs: number,
+  tickCount: number,
+  intervalMinutes: number,
+  tickMs: number = 60_000,
+): boolean[] {
+  let last: string | null = null;
+  const executed: boolean[] = [];
+  for (let i = 0; i < tickCount; i++) {
+    const nowMs = startMs + i * tickMs;
+    const skip = shouldSkipScheduledRun(last, intervalMinutes, nowMs);
+    executed.push(!skip);
+    if (!skip) {
+      last = new Date(nowMs).toISOString();
+    }
+  }
+  return executed;
+}
+
+describe("shouldSkipScheduledRun — 1-minute host cadence", () => {
+  const t0 = Date.parse("2026-06-15T08:00:00.000Z");
+
+  it("interval 1 minute: command allowed on every tick (no extra throttle)", () => {
+    const n = 12;
+    const ran = simulateMinuteCadence(t0, n, 1);
+    expect(ran).toHaveLength(n);
+    expect(ran.every(Boolean)).toBe(true);
+  });
+
+  it("interval 2 minutes: command runs every other minute", () => {
+    const ran = simulateMinuteCadence(t0, 12, 2);
+    expect(ran).toEqual([
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+    ]);
+  });
+
+  it("interval 3 minutes: command runs every third tick", () => {
+    const ran = simulateMinuteCadence(t0, 10, 3);
+    expect(ran).toEqual([true, false, false, true, false, false, true, false, false, true]);
+  });
 });

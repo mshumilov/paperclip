@@ -168,10 +168,11 @@ export function shouldSkipScheduledRun(
   if (!lastRunIso) return false;
   const last = Date.parse(lastRunIso);
   if (!Number.isFinite(last)) return false;
-  // `intervalMinutes === 1` with a ~1/min host cron: comparing wall-clock seconds to a full
-  // 60_000 ms window skips almost every tick, because `last` is recorded when the command
-  // *finishes*, so the next host tick is often slightly under 60s later. For 1 (or less),
-  // treat the host schedule as the throttle — run on every host tick.
+  // Clock skew or identical timestamp — do not skip (avoids a stuck "always throttle" state).
+  if (nowMs <= last) return false;
+  // With a ~1/min host cron, `last` is set when the command *finishes*, so the next tick is
+  // often slightly under 60s later; `elapsedMin < 1` would skip almost every run. For interval
+  // 1, the host cadence is the throttle — run on every schedule tick.
   if (intervalMinutes <= 1) return false;
   const elapsedMin = (nowMs - last) / 60_000;
   return elapsedMin < intervalMinutes;

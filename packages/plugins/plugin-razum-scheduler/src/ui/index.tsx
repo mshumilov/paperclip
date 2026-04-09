@@ -64,43 +64,6 @@ type RunHistoryData = {
   }>;
 };
 
-/** Subset of `GET /api/plugins/:id/dashboard` used for Recent Job Runs. */
-type PluginDashboardRecentJobRun = {
-  id: string;
-  jobId: string;
-  jobKey?: string;
-  trigger: string;
-  status: string;
-  durationMs: number | null;
-  error: string | null;
-  createdAt: string;
-};
-
-type PluginDashboardPayload = {
-  recentJobRuns: PluginDashboardRecentJobRun[];
-  checkedAt: string;
-};
-
-function formatDurationMs(ms: number | null): string {
-  if (ms == null || !Number.isFinite(ms)) return "—";
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  return `${(ms / 1000).toFixed(1)} s`;
-}
-
-function jobStatusColor(status: string): string {
-  const s = status.toLowerCase();
-  if (s === "completed" || s === "success" || s === "succeeded") return "var(--chart-2, #22c55e)";
-  if (s === "failed" || s === "error") return "var(--destructive, #ef4444)";
-  if (s === "running" || s === "pending") return "var(--chart-4, #eab308)";
-  return "var(--muted-foreground, #9ca3af)";
-}
-
-/** Worker log id is `${job.runId}:${taskId}`; job run id is a UUID (no `:`). */
-function hostRunIdFromWorkerRunId(workerId: string): string {
-  const i = workerId.indexOf(":");
-  return i === -1 ? workerId : workerId.slice(0, i);
-}
-
 /** Resolves task id for grouping; `null` = omit from UI (old rows without task id). */
 function taskIdForRun(run: RunHistoryData["runs"][number]): string | null {
   const fromField = run.taskId?.trim();
@@ -250,104 +213,6 @@ export function DashboardWidget(_props: PluginWidgetProps) {
       </div>
       <div>Shortest interval: {data?.intervalMinutes ?? "—"} min (per-task throttle)</div>
       <div style={{ opacity: 0.75 }}>Checked: {data?.checkedAt ?? "—"}</div>
-    </div>
-  );
-}
-
-function MergedRunLogRow({
-  host,
-  workers,
-}: {
-  host: PluginDashboardRecentJobRun | null;
-  workers: RunHistoryData["runs"];
-}) {
-  const at = host?.createdAt ?? workers[0]?.at ?? "";
-  const dotColor = host ? jobStatusColor(host.status) : workers[0]?.ok ? "var(--chart-2, #22c55e)" : "var(--destructive, #ef4444)";
-  const headline =
-    host != null
-      ? `${host.status} · ${formatDurationMs(host.durationMs)} (${host.trigger})`
-      : workers.length > 0
-        ? `${workers.map((w) => w.summary).join(" · ")} (${workers[0]?.trigger ?? "?"})`
-        : "—";
-
-  return (
-    <div
-      style={{
-        borderBottom: "1px solid color-mix(in srgb, var(--border, #444) 80%, transparent)",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          gap: "12px",
-          alignItems: "flex-start",
-          padding: "10px 14px",
-          fontSize: "13px",
-        }}
-      >
-        <div
-          style={{
-            width: "28px",
-            height: "28px",
-            borderRadius: "999px",
-            background: "color-mix(in srgb, var(--muted-foreground, #888) 22%, transparent)",
-            display: "grid",
-            placeItems: "center",
-            fontSize: "10px",
-            fontWeight: 600,
-            flexShrink: 0,
-            color: "var(--foreground, #eee)",
-          }}
-        >
-          <span
-            style={{
-              width: "10px",
-              height: "10px",
-              borderRadius: "999px",
-              background: dotColor,
-              display: "block",
-            }}
-          />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ lineHeight: 1.35 }}>
-            <strong style={{ color: "var(--foreground, #eee)" }}>System</strong>
-            <span style={{ color: "var(--muted-foreground, #9ca3af)", marginLeft: "6px", fontSize: "11px" }}>
-              {headline}
-            </span>
-          </div>
-          {host?.error ? (
-            <pre
-              style={{
-                margin: "8px 0 0",
-                fontSize: "11px",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                color: "var(--destructive, #fca5a5)",
-              }}
-            >
-              {host.error}
-            </pre>
-          ) : null}
-          {workers.length === 0 ? (
-            <p style={{ fontSize: "11px", color: "var(--muted-foreground, #9ca3af)", margin: "8px 0 0" }}>
-              No worker log for this run (often: host tick while the task was skipped by interval throttle).
-            </p>
-          ) : (
-            workers.map((w) => <RunLogRow key={w.id} run={w} nested />)
-          )}
-        </div>
-        <span
-          style={{
-            fontSize: "11px",
-            color: "var(--muted-foreground, #9ca3af)",
-            flexShrink: 0,
-            paddingTop: "2px",
-          }}
-        >
-          {timeAgo(at)}
-        </span>
-      </div>
     </div>
   );
 }
@@ -514,8 +379,6 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
   const { configJson, setConfigJson, loading, saving, error, save } = useInstanceConfigForm();
   const { data: historyData, loading: historyLoading, error: historyError, refresh } =
     usePluginData<RunHistoryData>("run-history");
-  const [hostDash, setHostDash] = useState<PluginDashboardPayload | null>(null);
-  const [hostDashErr, setHostDashErr] = useState<string | null>(null);
   const [companies, setCompanies] = useState<IdName[]>([]);
   const [projectsByCompany, setProjectsByCompany] = useState<Record<string, IdName[]>>({});
   const projectsFetchedRef = useRef<Set<string>>(new Set());
@@ -524,29 +387,14 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
 
   const tasks = (Array.isArray(configJson.tasks) ? configJson.tasks : []) as SchedulerTask[];
 
-  const refreshDashboard = useCallback(() => {
-    return hostFetchJson<PluginDashboardPayload>(
-      `/api/plugins/${encodeURIComponent(PLUGIN_INSTANCE_KEY)}/dashboard`,
-    )
-      .then((d) => {
-        setHostDash(d);
-        setHostDashErr(null);
-      })
-      .catch((e) => {
-        setHostDashErr(e instanceof Error ? e.message : String(e));
-      });
-  }, []);
-
   useEffect(() => {
     if (tab !== "output") return;
     void refresh();
-    void refreshDashboard();
     const t = window.setInterval(() => {
       void refresh();
-      void refreshDashboard();
     }, 8000);
     return () => window.clearInterval(t);
-  }, [tab, refresh, refreshDashboard]);
+  }, [tab, refresh]);
 
   useEffect(() => {
     if (tab !== "settings") return;
@@ -601,41 +449,6 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
     return m;
   }, [historyData]);
 
-  const hostByJobRunId = useMemo(() => {
-    const m = new Map<string, PluginDashboardRecentJobRun>();
-    for (const hr of hostDash?.recentJobRuns ?? []) {
-      m.set(hr.id, hr);
-    }
-    return m;
-  }, [hostDash]);
-
-  const resolveHostForWorkerRun = useCallback(
-    (run: RunHistoryData["runs"][number]) =>
-      hostByJobRunId.get(hostRunIdFromWorkerRunId(run.id)) ?? null,
-    [hostByJobRunId],
-  );
-
-  const skippedHostOnlyRows = useMemo(() => {
-    const recent = hostDash?.recentJobRuns ?? [];
-    const w = historyData?.runs ?? [];
-    if (recent.length === 0) {
-      return [] as Array<{
-        key: string;
-        host: PluginDashboardRecentJobRun;
-        workers: RunHistoryData["runs"];
-      }>;
-    }
-    const hostIdsWithWorker = new Set(w.map((r) => hostRunIdFromWorkerRunId(r.id)));
-    return recent
-      .filter((hr) => !hostIdsWithWorker.has(hr.id))
-      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
-      .map((hr) => ({
-        key: `host-only-${hr.id}`,
-        host: hr,
-        workers: [] as RunHistoryData["runs"],
-      }));
-  }, [hostDash, historyData]);
-
   const orphanTaskIds = useMemo(() => {
     const ids = [...runsByTaskId.keys()].filter((k) => !tasks.some((t) => t.id === k));
     ids.sort((a, b) => {
@@ -645,6 +458,11 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
     });
     return ids;
   }, [runsByTaskId, tasks]);
+
+  const visibleRunCount = useMemo(
+    () => (historyData?.runs ?? []).filter((r) => taskIdForRun(r) != null).length,
+    [historyData],
+  );
 
   function setTaskField(index: number, patch: Partial<SchedulerTask>) {
     setConfigJson((c) => {
@@ -944,17 +762,14 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
         <section>
           <h3 style={sectionTitle}>Execution log</h3>
           <p style={{ fontSize: "12px", opacity: 0.75, margin: "0 0 12px" }}>
-            Output is grouped <strong>by task</strong> (newest first inside each group). Each row still pairs a{" "}
-            <strong>host job run</strong> with that task’s worker stdout/stderr when the command actually ran. If you
-            only see <em>Host schedule (no command logged)</em>, the scheduler ticked but every task was skipped
-            (e.g. interval throttle).
+            Only <strong>real command runs</strong> are listed, grouped by task (newest first in each group). stdout/stderr
+            appear under each row when the worker captured output.
           </p>
           <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" }}>
             <button
               type="button"
               onClick={() => {
                 void refresh();
-                void refreshDashboard();
               }}
               style={{
                 padding: "6px 12px",
@@ -968,26 +783,15 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
             >
               Refresh
             </button>
-            {hostDash?.checkedAt ? (
-              <span style={{ fontSize: "11px", color: "var(--muted-foreground, #9ca3af)" }}>
-                Host data {timeAgo(hostDash.checkedAt)}
-              </span>
-            ) : null}
           </div>
           {historyError ? (
             <p style={{ fontSize: "13px", color: "var(--destructive, #fca5a5)" }}>{historyError.message}</p>
-          ) : null}
-          {hostDashErr ? (
-            <p style={{ fontSize: "13px", color: "var(--destructive, #fca5a5)" }}>{hostDashErr}</p>
           ) : null}
           {historyLoading && !historyData ? (
             <p style={{ fontSize: "13px", opacity: 0.7 }}>Loading log…</p>
           ) : null}
 
-          {!historyLoading &&
-          tasks.length === 0 &&
-          orphanTaskIds.length === 0 &&
-          skippedHostOnlyRows.length === 0 ? (
+          {!historyLoading && tasks.length === 0 && orphanTaskIds.length === 0 && visibleRunCount === 0 ? (
             <p style={{ fontSize: "13px", opacity: 0.7 }}>No runs recorded yet.</p>
           ) : null}
 
@@ -1030,13 +834,7 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
                     {runs.length === 0 ? (
                       <p style={{ fontSize: "12px", opacity: 0.7, margin: "12px 14px" }}>No recorded runs for this task.</p>
                     ) : (
-                      runs.map((run) => (
-                        <MergedRunLogRow
-                          key={run.id}
-                          host={resolveHostForWorkerRun(run)}
-                          workers={[run]}
-                        />
-                      ))
+                      runs.map((run) => <RunLogRow key={run.id} run={run} />)
                     )}
                   </div>
                 </div>
@@ -1066,34 +864,13 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
                     }}
                   >
                     {runs.map((run) => (
-                      <MergedRunLogRow key={run.id} host={resolveHostForWorkerRun(run)} workers={[run]} />
+                      <RunLogRow key={run.id} run={run} />
                     ))}
                   </div>
                 </div>
               );
             })}
 
-            {skippedHostOnlyRows.length > 0 ? (
-              <div>
-                <h4 style={{ fontSize: "14px", fontWeight: 600, margin: "0 0 8px", color: "var(--foreground, #eee)" }}>
-                  Host schedule (no command logged)
-                </h4>
-                <p style={{ fontSize: "11px", opacity: 0.65, margin: "0 0 8px" }}>
-                  Host fired the job, but no worker log was written — usually all tasks were skipped (interval throttle).
-                </p>
-                <div
-                  style={{
-                    border: "1px solid color-mix(in srgb, var(--border, #444) 90%, transparent)",
-                    borderRadius: "8px",
-                    overflow: "hidden",
-                  }}
-                >
-                  {skippedHostOnlyRows.map((row) => (
-                    <MergedRunLogRow key={row.key} host={row.host} workers={row.workers} />
-                  ))}
-                </div>
-              </div>
-            ) : null}
           </div>
         </section>
       ) : null}
