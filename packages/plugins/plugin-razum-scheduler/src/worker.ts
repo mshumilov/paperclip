@@ -163,6 +163,7 @@ async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): P
   let lastRuns = await loadLastRunsMap(ctx);
   const errors: string[] = [];
   let ranAny = false;
+  let succeededAny = false;
 
   for (const task of config.tasks) {
     if (!task.companyId || !task.projectId || !task.command) {
@@ -184,17 +185,27 @@ async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): P
     try {
       await runOneTask(ctx, job, task, now);
       ranAny = true;
+      succeededAny = true;
       if (job.trigger === "schedule") {
         lastRuns = { ...lastRuns, [task.id]: new Date(now).toISOString() };
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push(`${task.label || task.id}: ${msg}`);
+      ranAny = true;
     }
   }
 
-  if (errors.length > 0) {
+  // One failing npm script must not mark the whole host job "failed" if another task succeeded
+  // (each task still logs to run-history and activity on its own).
+  if (errors.length > 0 && !succeededAny) {
     throw new Error(errors.join(" | "));
+  }
+  if (errors.length > 0 && succeededAny) {
+    ctx.logger.warn("Some scheduled tasks failed; others succeeded", {
+      runId: job.runId,
+      errors: errors.join(" | "),
+    });
   }
 
   if (job.trigger === "schedule" && !ranAny && errors.length === 0) {

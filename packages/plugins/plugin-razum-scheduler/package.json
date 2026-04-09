@@ -1,6 +1,6 @@
 {
   "name": "plugin-razum-scheduler",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "type": "module",
   "private": true,
   "description": "Runs one or more shell commands on a schedule in Paperclip project workspaces (Razum scheduler).",
