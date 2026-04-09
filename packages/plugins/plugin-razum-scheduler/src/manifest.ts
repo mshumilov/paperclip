@@ -33,7 +33,7 @@ const taskItemSchema = {
     command: {
       type: "string",
       title: "Command",
-      description: "Full shell command to run in that directory (e.g. npm run sync-incoming).",
+      description: "Shell command to run in the workspace directory (pipes and chaining allowed).",
       minLength: 1,
     },
     intervalMinutes: {
@@ -51,7 +51,7 @@ const taskItemSchema = {
 const manifest: PaperclipPluginManifestV1 = {
   id: "plugin-razum-scheduler",
   apiVersion: 1,
-  version: "0.2.0",
+  version: "0.2.1",
   displayName: "Razum scheduler",
   description:
     "Runs one or more shell commands on a timer in project workspaces. Host fires the job every minute; each task’s intervalMinutes throttles how often that command actually runs.",
@@ -78,7 +78,7 @@ const manifest: PaperclipPluginManifestV1 = {
     properties: {
       tasks: {
         type: "array",
-        minItems: 1,
+        minItems: 0,
         maxItems: 20,
         title: "Scheduled tasks",
         items: taskItemSchema,

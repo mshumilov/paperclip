@@ -6,6 +6,8 @@ import {
 import {
   useCallback,
   useEffect,
+  useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type FormEvent,
@@ -87,47 +89,17 @@ function formatDurationMs(ms: number | null): string {
 
 function jobStatusColor(status: string): string {
   const s = status.toLowerCase();
-  if (s === "completed" || s === "success") return "var(--chart-2, #22c55e)";
+  if (s === "completed" || s === "success" || s === "succeeded") return "var(--chart-2, #22c55e)";
   if (s === "failed" || s === "error") return "var(--destructive, #ef4444)";
   if (s === "running" || s === "pending") return "var(--chart-4, #eab308)";
   return "var(--muted-foreground, #9ca3af)";
 }
 
-function useHostPluginDashboard(active: boolean) {
-  const [data, setData] = useState<PluginDashboardPayload | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
-
-  const refresh = useCallback(() => {
-    if (!active) return Promise.resolve();
-    setLoading(true);
-    return hostFetchJson<PluginDashboardPayload>(
-      `/api/plugins/${encodeURIComponent(PLUGIN_INSTANCE_KEY)}/dashboard`,
-    )
-      .then((d) => {
-        setData(d);
-        setFetchError(null);
-      })
-      .catch((e) => {
-        setFetchError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-  }, [active]);
-
-  useEffect(() => {
-    if (!active) return;
-    void refresh();
-  }, [active, refresh]);
-
-  useEffect(() => {
-    if (!active) return;
-    const t = window.setInterval(() => void refresh(), 12_000);
-    return () => window.clearInterval(t);
-  }, [active, refresh]);
-
-  return { data, loading, fetchError, refresh };
+function workerRunsForHostRun(
+  hostRunId: string,
+  workers: RunHistoryData["runs"],
+): RunHistoryData["runs"] {
+  return workers.filter((w) => w.id === hostRunId || w.id.startsWith(`${hostRunId}:`));
 }
 
 const tabBarStyle: CSSProperties = {
@@ -165,93 +137,18 @@ function TabButton({
   );
 }
 
-function HostJobRunRow({ run }: { run: PluginDashboardRecentJobRun }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "space-between",
-        gap: "10px",
-        padding: "8px 10px",
-        borderRadius: "8px",
-        background: "color-mix(in srgb, var(--muted-foreground, #888) 8%, transparent)",
-        fontSize: "13px",
-      }}
-    >
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-          <span
-            style={{
-              width: "8px",
-              height: "8px",
-              borderRadius: "999px",
-              background: jobStatusColor(run.status),
-              flexShrink: 0,
-            }}
-          />
-          <span style={{ fontFamily: "ui-monospace, monospace", fontSize: "11px" }} title={run.jobKey ?? run.jobId}>
-            {run.jobKey ?? run.jobId.slice(0, 8)}
-          </span>
-          <span
-            style={{
-              fontSize: "10px",
-              padding: "2px 6px",
-              borderRadius: "4px",
-              border: "1px solid color-mix(in srgb, var(--border, #444) 80%, transparent)",
-            }}
-          >
-            {run.trigger}
-          </span>
-          <span style={{ fontSize: "11px", color: "var(--muted-foreground, #9ca3af)" }}>{run.status}</span>
-        </div>
-        {run.error ? (
-          <details style={{ marginTop: "6px" }}>
-            <summary style={{ cursor: "pointer", fontSize: "12px", color: "var(--muted-foreground, #9ca3af)" }}>
-              Error detail
-            </summary>
-            <pre
-              style={{
-                margin: "6px 0 0",
-                fontSize: "11px",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                color: "var(--destructive, #fca5a5)",
-              }}
-            >
-              {run.error}
-            </pre>
-          </details>
-        ) : null}
-      </div>
-      <div
-        style={{
-          flexShrink: 0,
-          textAlign: "right",
-          fontSize: "11px",
-          color: "var(--muted-foreground, #9ca3af)",
-        }}
-      >
-        <div>{formatDurationMs(run.durationMs)}</div>
-        <div title={run.createdAt}>{timeAgo(run.createdAt)}</div>
-      </div>
-    </div>
-  );
-}
-
 function newTaskId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `task-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function defaultTasksConfig(): Record<string, unknown> {
-  return { tasks: [emptySchedulerTask(newTaskId())] };
+  return { tasks: [] };
 }
 
-/** Server config is only `tasks[]`; empty / invalid → one blank row for the editor. */
+/** Server config is only `tasks[]`; empty is valid (no default row). */
 function configFromServer(raw: Record<string, unknown> | null | undefined): Record<string, unknown> {
   const merged = { ...(raw ?? {}) } as Record<string, unknown>;
   const { tasks } = parseSchedulerConfig(merged);
-  if (tasks.length === 0) return defaultTasksConfig();
   return { tasks: tasks.map((t) => ({ ...t })) };
 }
 
@@ -349,9 +246,22 @@ export function DashboardWidget(_props: PluginWidgetProps) {
   );
 }
 
-function RunLogRow({ run }: { run: RunHistoryData["runs"][number] }) {
-  const { stdoutTail, stderrTail } = run;
-  const hasOutput = Boolean(stdoutTail || stderrTail);
+function MergedRunLogRow({
+  host,
+  workers,
+}: {
+  host: PluginDashboardRecentJobRun | null;
+  workers: RunHistoryData["runs"];
+}) {
+  const at = host?.createdAt ?? workers[0]?.at ?? "";
+  const dotColor = host ? jobStatusColor(host.status) : workers[0]?.ok ? "var(--chart-2, #22c55e)" : "var(--destructive, #ef4444)";
+  const headline =
+    host != null
+      ? `${host.status} · ${formatDurationMs(host.durationMs)} (${host.trigger})`
+      : workers.length > 0
+        ? `${workers.map((w) => w.summary).join(" · ")} (${workers[0]?.trigger ?? "?"})`
+        : "—";
+
   return (
     <div
       style={{
@@ -381,8 +291,99 @@ function RunLogRow({ run }: { run: RunHistoryData["runs"][number] }) {
             color: "var(--foreground, #eee)",
           }}
         >
+          <span
+            style={{
+              width: "10px",
+              height: "10px",
+              borderRadius: "999px",
+              background: dotColor,
+              display: "block",
+            }}
+          />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ lineHeight: 1.35 }}>
+            <strong style={{ color: "var(--foreground, #eee)" }}>System</strong>
+            <span style={{ color: "var(--muted-foreground, #9ca3af)", marginLeft: "6px", fontSize: "11px" }}>
+              {headline}
+            </span>
+          </div>
+          {host?.error ? (
+            <pre
+              style={{
+                margin: "8px 0 0",
+                fontSize: "11px",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                color: "var(--destructive, #fca5a5)",
+              }}
+            >
+              {host.error}
+            </pre>
+          ) : null}
+          {workers.length === 0 ? (
+            <p style={{ fontSize: "11px", color: "var(--muted-foreground, #9ca3af)", margin: "8px 0 0" }}>
+              No worker log for this run (often: host tick while the task was skipped by interval throttle).
+            </p>
+          ) : (
+            workers.map((w) => <RunLogRow key={w.id} run={w} nested />)
+          )}
+        </div>
+        <span
+          style={{
+            fontSize: "11px",
+            color: "var(--muted-foreground, #9ca3af)",
+            flexShrink: 0,
+            paddingTop: "2px",
+          }}
+        >
+          {timeAgo(at)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function RunLogRow({ run, nested }: { run: RunHistoryData["runs"][number]; nested?: boolean }) {
+  const { stdoutTail, stderrTail } = run;
+  const hasOutput = Boolean(stdoutTail || stderrTail);
+  const pad = nested ? "8px 0 8px 12px" : "10px 14px";
+  const borderBottom = nested
+    ? "1px solid color-mix(in srgb, var(--border, #444) 55%, transparent)"
+    : "1px solid color-mix(in srgb, var(--border, #444) 80%, transparent)";
+  return (
+    <div
+      style={{
+        borderBottom: borderBottom,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          gap: "12px",
+          alignItems: "flex-start",
+          padding: pad,
+          fontSize: nested ? "12px" : "13px",
+        }}
+      >
+        {!nested ? (
+        <div
+          style={{
+            width: "28px",
+            height: "28px",
+            borderRadius: "999px",
+            background: "color-mix(in srgb, var(--muted-foreground, #888) 22%, transparent)",
+            display: "grid",
+            placeItems: "center",
+            fontSize: "10px",
+            fontWeight: 600,
+            flexShrink: 0,
+            color: "var(--foreground, #eee)",
+          }}
+        >
           SY
         </div>
+        ) : null}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ lineHeight: 1.35 }}>
             <strong style={{ color: "var(--foreground, #eee)" }}>System</strong>
@@ -481,40 +482,117 @@ function RunLogRow({ run }: { run: RunHistoryData["runs"][number] }) {
             </p>
           )}
         </div>
-        <span
-          style={{
-            fontSize: "11px",
-            color: "var(--muted-foreground, #9ca3af)",
-            flexShrink: 0,
-            paddingTop: "2px",
-          }}
-        >
-          {timeAgo(run.at)}
-        </span>
+        {!nested ? (
+          <span
+            style={{
+              fontSize: "11px",
+              color: "var(--muted-foreground, #9ca3af)",
+              flexShrink: 0,
+              paddingTop: "2px",
+            }}
+          >
+            {timeAgo(run.at)}
+          </span>
+        ) : null}
       </div>
     </div>
   );
 }
 
+type IdName = { id: string; name: string };
+
 export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
-  const [tab, setTab] = useState<"settings" | "hostJobs" | "output">("settings");
+  const [tab, setTab] = useState<"settings" | "output">("settings");
   const { configJson, setConfigJson, loading, saving, error, save } = useInstanceConfigForm();
   const { data: historyData, loading: historyLoading, error: historyError, refresh } =
     usePluginData<RunHistoryData>("run-history");
-  const hostDash = useHostPluginDashboard(tab === "hostJobs");
+  const [hostDash, setHostDash] = useState<PluginDashboardPayload | null>(null);
+  const [hostDashErr, setHostDashErr] = useState<string | null>(null);
+  const [companies, setCompanies] = useState<IdName[]>([]);
+  const [projectsByCompany, setProjectsByCompany] = useState<Record<string, IdName[]>>({});
+  const projectsFetchedRef = useRef<Set<string>>(new Set());
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const tasks = (Array.isArray(configJson.tasks) ? configJson.tasks : []) as SchedulerTask[];
 
+  const refreshDashboard = useCallback(() => {
+    return hostFetchJson<PluginDashboardPayload>(
+      `/api/plugins/${encodeURIComponent(PLUGIN_INSTANCE_KEY)}/dashboard`,
+    )
+      .then((d) => {
+        setHostDash(d);
+        setHostDashErr(null);
+      })
+      .catch((e) => {
+        setHostDashErr(e instanceof Error ? e.message : String(e));
+      });
+  }, []);
+
   useEffect(() => {
     if (tab !== "output") return;
     void refresh();
+    void refreshDashboard();
     const t = window.setInterval(() => {
       void refresh();
+      void refreshDashboard();
     }, 8000);
     return () => window.clearInterval(t);
-  }, [tab, refresh]);
+  }, [tab, refresh, refreshDashboard]);
+
+  useEffect(() => {
+    if (tab !== "settings") return;
+    let cancelled = false;
+    hostFetchJson<IdName[]>("/api/companies")
+      .then((rows) => {
+        if (!cancelled) setCompanies(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setCompanies([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
+
+  const companyIdsKey = tasks
+    .map((t) => t.companyId.trim())
+    .filter(Boolean)
+    .sort()
+    .join("|");
+
+  useEffect(() => {
+    if (tab !== "settings") return;
+    const cids = companyIdsKey ? companyIdsKey.split("|") : [];
+    for (const cid of cids) {
+      if (!cid || projectsFetchedRef.current.has(cid)) continue;
+      projectsFetchedRef.current.add(cid);
+      hostFetchJson<IdName[]>(`/api/companies/${encodeURIComponent(cid)}/projects`)
+        .then((rows) => {
+          setProjectsByCompany((m) => ({ ...m, [cid]: Array.isArray(rows) ? rows : [] }));
+        })
+        .catch(() => {
+          setProjectsByCompany((m) => ({ ...m, [cid]: [] }));
+        });
+    }
+  }, [tab, companyIdsKey]);
+
+  const mergedLogRows = useMemo(() => {
+    const w = historyData?.runs ?? [];
+    const recent = hostDash?.recentJobRuns;
+    if (recent && recent.length > 0) {
+      return recent.map((hr) => ({
+        key: hr.id,
+        host: hr,
+        workers: workerRunsForHostRun(hr.id, w),
+      }));
+    }
+    return w.map((run) => ({
+      key: run.id,
+      host: null as PluginDashboardRecentJobRun | null,
+      workers: [run],
+    }));
+  }, [historyData, hostDash]);
 
   function setTaskField(index: number, patch: Partial<SchedulerTask>) {
     setConfigJson((c) => {
@@ -537,7 +615,7 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
   function removeTask(index: number) {
     setConfigJson((c) => {
       const list = [...((c.tasks as SchedulerTask[]) ?? [])];
-      if (list.length <= 1) return c;
+      if (index < 0 || index >= list.length) return c;
       list.splice(index, 1);
       return { tasks: list };
     });
@@ -546,11 +624,13 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setValidationError(null);
-    for (let i = 0; i < tasks.length; i += 1) {
-      const t = tasks[i];
-      if (!t.companyId?.trim() || !t.projectId?.trim() || !t.command?.trim()) {
-        setValidationError(`Task ${i + 1}: fill company, project, and command (or remove the row).`);
-        return;
+    if (tasks.length > 0) {
+      for (let i = 0; i < tasks.length; i += 1) {
+        const t = tasks[i];
+        if (!t.companyId?.trim() || !t.projectId?.trim() || !t.command?.trim()) {
+          setValidationError(`Task ${i + 1}: choose company, project, and command (or remove the row).`);
+          return;
+        }
       }
     }
     await save({ tasks });
@@ -563,9 +643,6 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
       <div style={tabBarStyle}>
         <TabButton selected={tab === "settings"} onClick={() => setTab("settings")}>
           Configuration
-        </TabButton>
-        <TabButton selected={tab === "hostJobs"} onClick={() => setTab("hostJobs")}>
-          Host job runs
         </TabButton>
         <TabButton selected={tab === "output"} onClick={() => setTab("output")}>
           Command output
@@ -580,7 +657,8 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
             <div>
               <h3 style={sectionTitle}>Scheduler tasks</h3>
               <p style={{ fontSize: "12px", opacity: 0.75, margin: 0 }}>
-                Board company context: {context.companyId ?? "none"} — you can paste the same UUID into each task.
+                Board context company id: {context.companyId ?? "none"} (for reference). Pick company and project by name
+                below; UUIDs are stored in config.
               </p>
             </div>
 
@@ -632,23 +710,21 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
                 </legend>
 
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" }}>
-                  {tasks.length > 1 ? (
-                    <button
-                      type="button"
-                      onClick={() => removeTask(index)}
-                      style={{
-                        padding: "6px 12px",
-                        borderRadius: "8px",
-                        border: "1px solid color-mix(in srgb, var(--destructive, #b91c1c) 50%, transparent)",
-                        background: "transparent",
-                        color: "var(--destructive, #fca5a5)",
-                        fontSize: "12px",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Remove task
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => removeTask(index)}
+                    style={{
+                      padding: "6px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid color-mix(in srgb, var(--destructive, #b91c1c) 50%, transparent)",
+                      background: "transparent",
+                      color: "var(--destructive, #fca5a5)",
+                      fontSize: "12px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Remove task
+                  </button>
                 </div>
 
                 <label style={labelStyle}>
@@ -657,31 +733,60 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
                     style={inputStyle}
                     value={task.label}
                     onChange={(e) => setTaskField(index, { label: e.target.value })}
-                    placeholder="e.g. YouGile sync"
+                    placeholder="Short name for logs"
                     autoComplete="off"
                   />
                 </label>
 
                 <label style={labelStyle}>
-                  Company ID
-                  <input
+                  Company
+                  <select
                     style={inputStyle}
                     value={task.companyId}
-                    onChange={(e) => setTaskField(index, { companyId: e.target.value })}
-                    placeholder="UUID"
-                    autoComplete="off"
-                  />
+                    onChange={(e) => {
+                      const cid = e.target.value;
+                      setTaskField(index, { companyId: cid, projectId: "" });
+                      if (cid && !projectsFetchedRef.current.has(cid)) {
+                        projectsFetchedRef.current.add(cid);
+                        hostFetchJson<IdName[]>(`/api/companies/${encodeURIComponent(cid)}/projects`)
+                          .then((rows) => {
+                            setProjectsByCompany((m) => ({
+                              ...m,
+                              [cid]: Array.isArray(rows) ? rows : [],
+                            }));
+                          })
+                          .catch(() => {
+                            setProjectsByCompany((m) => ({ ...m, [cid]: [] }));
+                          });
+                      }
+                    }}
+                  >
+                    <option value="">— Select company —</option>
+                    {companies.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span style={helpStyle}>Stored id: {task.companyId || "—"}</span>
                 </label>
 
                 <label style={labelStyle}>
-                  Project ID
-                  <input
+                  Project
+                  <select
                     style={inputStyle}
                     value={task.projectId}
+                    disabled={!task.companyId.trim()}
                     onChange={(e) => setTaskField(index, { projectId: e.target.value })}
-                    placeholder="UUID"
-                    autoComplete="off"
-                  />
+                  >
+                    <option value="">— Select project —</option>
+                    {(projectsByCompany[task.companyId] ?? []).map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span style={helpStyle}>Stored id: {task.projectId || "—"}</span>
                 </label>
 
                 <label style={labelStyle}>
@@ -713,7 +818,7 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
                     style={inputStyle}
                     value={task.command}
                     onChange={(e) => setTaskField(index, { command: e.target.value })}
-                    placeholder="npm run sync-incoming"
+                    placeholder="Shell command (runs in workspace directory)"
                     autoComplete="off"
                   />
                 </label>
@@ -731,6 +836,12 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
                 </label>
               </fieldset>
             ))}
+
+            {tasks.length === 0 ? (
+              <p style={{ fontSize: "13px", opacity: 0.75, margin: 0 }}>
+                No tasks configured — the worker will not run any commands until you add at least one task.
+              </p>
+            ) : null}
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "center" }}>
               <button
@@ -777,18 +888,21 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
         )
       ) : null}
 
-      {tab === "hostJobs" ? (
+      {tab === "output" ? (
         <section>
-          <h3 style={sectionTitle}>Recent job runs (host)</h3>
+          <h3 style={sectionTitle}>Execution log</h3>
           <p style={{ fontSize: "12px", opacity: 0.75, margin: "0 0 12px" }}>
-            Same list as the board tab <strong>Status</strong> on this plugin&apos;s settings page. Worker diagnostics
-            stay there; this view only mirrors scheduled job run history.
+            Merges <strong>host job runs</strong> (same cadence as the Status tab) with <strong>worker</strong> stdout/stderr
+            when a command actually ran. Rows with no worker section usually mean the host ticked but every task was
+            skipped (interval throttle).
           </p>
           <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" }}>
             <button
               type="button"
-              onClick={() => void hostDash.refresh()}
-              disabled={hostDash.loading}
+              onClick={() => {
+                void refresh();
+                void refreshDashboard();
+              }}
               style={{
                 padding: "6px 12px",
                 borderRadius: "8px",
@@ -796,54 +910,30 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
                 background: "transparent",
                 color: "var(--foreground, #eee)",
                 fontSize: "12px",
-                cursor: hostDash.loading ? "wait" : "pointer",
+                cursor: "pointer",
               }}
             >
-              {hostDash.loading ? "Refreshing…" : "Refresh"}
+              Refresh
             </button>
-            {hostDash.data?.checkedAt ? (
+            {hostDash?.checkedAt ? (
               <span style={{ fontSize: "11px", color: "var(--muted-foreground, #9ca3af)" }}>
-                Checked {timeAgo(hostDash.data.checkedAt)}
+                Host data {timeAgo(hostDash.checkedAt)}
               </span>
             ) : null}
           </div>
-          {hostDash.fetchError ? (
-            <p style={{ fontSize: "13px", color: "var(--destructive, #fca5a5)" }}>{hostDash.fetchError}</p>
-          ) : null}
-          {!hostDash.fetchError && hostDash.loading && !hostDash.data ? (
-            <p style={{ fontSize: "13px", opacity: 0.7 }}>Loading…</p>
-          ) : null}
-          {hostDash.data && hostDash.data.recentJobRuns.length === 0 ? (
-            <p style={{ fontSize: "13px", opacity: 0.7 }}>
-              No job runs yet (or job scheduling unavailable for this plugin).
-            </p>
-          ) : null}
-          {hostDash.data && hostDash.data.recentJobRuns.length > 0 ? (
-            <div style={{ display: "grid", gap: "8px" }}>
-              {hostDash.data.recentJobRuns.map((run) => (
-                <HostJobRunRow key={run.id} run={run} />
-              ))}
-            </div>
-          ) : null}
-        </section>
-      ) : null}
-
-      {tab === "output" ? (
-        <section>
-          <h3 style={sectionTitle}>Execution log</h3>
-          <p style={{ fontSize: "12px", opacity: 0.75, margin: "0 0 12px" }}>
-            Recent command runs (newest first). Open a row to see stdout/stderr tails.
-          </p>
           {historyError ? (
             <p style={{ fontSize: "13px", color: "var(--destructive, #fca5a5)" }}>{historyError.message}</p>
+          ) : null}
+          {hostDashErr ? (
+            <p style={{ fontSize: "13px", color: "var(--destructive, #fca5a5)" }}>{hostDashErr}</p>
           ) : null}
           {historyLoading && !historyData ? (
             <p style={{ fontSize: "13px", opacity: 0.7 }}>Loading log…</p>
           ) : null}
-          {historyData && historyData.runs.length === 0 ? (
+          {!historyLoading && mergedLogRows.length === 0 ? (
             <p style={{ fontSize: "13px", opacity: 0.7 }}>No runs recorded yet.</p>
           ) : null}
-          {historyData && historyData.runs.length > 0 ? (
+          {mergedLogRows.length > 0 ? (
             <div
               style={{
                 border: "1px solid color-mix(in srgb, var(--border, #444) 90%, transparent)",
@@ -851,8 +941,8 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
                 overflow: "hidden",
               }}
             >
-              {historyData.runs.map((run) => (
-                <RunLogRow key={`${run.id}:${run.at}`} run={run} />
+              {mergedLogRows.map((row) => (
+                <MergedRunLogRow key={row.key} host={row.host} workers={row.workers} />
               ))}
             </div>
           ) : null}

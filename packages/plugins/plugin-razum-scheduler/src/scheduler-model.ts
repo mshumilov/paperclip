@@ -181,7 +181,7 @@ export function emptySchedulerTask(id: string): SchedulerTask {
     projectId: "",
     workspaceName: "",
     cwdSubdir: "",
-    command: "npm run sync-incoming",
+    command: "",
     intervalMinutes: 1,
   };
 }

@@ -18,7 +18,7 @@ Configuration and a local **execution log** (command stdout/stderr tails, expand
 | Company ID / Project ID | Scope the workspace list. |
 | Workspace name | Exact Paperclip workspace display name; leave empty for primary. |
 | Subdirectory | Optional relative cwd under workspace. |
-| Command | e.g. `npm run sync-incoming` or `./scripts/job.sh`. |
+| Command | Any shell command for the workspace directory. |
 | Minimum interval | Scheduled runs only: skip if last **successful** scheduled run was sooner than this many minutes. |
 
 ## Develop

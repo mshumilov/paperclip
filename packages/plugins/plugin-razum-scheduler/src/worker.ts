@@ -43,6 +43,21 @@ async function loadLastRunsMap(ctx: PluginContext): Promise<Record<string, strin
   return parseLastRunsMap(raw);
 }
 
+/** Re-read + merge + write to reduce lost updates if state races with another writer. */
+async function appendRunHistoryEntry(ctx: PluginContext, entry: SchedulerRunLogEntry): Promise<void> {
+  const historyKey = { scopeKind: "instance" as const, stateKey: STATE_RUN_HISTORY };
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const prev = await ctx.state.get(historyKey);
+    const next = mergeRunHistory(prev, entry);
+    await ctx.state.set(historyKey, next);
+    const verify = parseRunHistory(await ctx.state.get(historyKey));
+    if (verify.some((r) => r.id === entry.id)) {
+      return;
+    }
+  }
+  ctx.logger.warn("run-history: could not verify append after retries", { entryId: entry.id });
+}
+
 async function runOneTask(
   ctx: PluginContext,
   job: PluginJobContext,
@@ -102,8 +117,6 @@ async function runOneTask(
     },
   });
 
-  const historyKey = { scopeKind: "instance" as const, stateKey: STATE_RUN_HISTORY };
-  const prevHistory = await ctx.state.get(historyKey);
   const entry: SchedulerRunLogEntry = {
     id: `${job.runId}:${task.id}`,
     at: new Date().toISOString(),
@@ -120,7 +133,7 @@ async function runOneTask(
     taskId: task.id,
     taskLabel: task.label || undefined,
   };
-  await ctx.state.set(historyKey, mergeRunHistory(prevHistory, entry));
+  await appendRunHistoryEntry(ctx, entry);
 
   if (code !== 0) {
     throw new Error(stderr || stdout || `Command exited with code ${code ?? "null"}`);
@@ -142,7 +155,8 @@ async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): P
   const config = parseSchedulerConfig(raw);
 
   if (config.tasks.length === 0) {
-    throw new Error("Add at least one task with company, project, and command in plugin settings");
+    ctx.logger.debug("No tasks configured — skipping job", { runId: job.runId });
+    return;
   }
 
   const now = Date.now();
@@ -152,7 +166,6 @@ async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): P
 
   for (const task of config.tasks) {
     if (!task.companyId || !task.projectId || !task.command) {
-      errors.push(`Task “${task.label || task.id}”: set company, project, and command`);
       continue;
     }
 
