@@ -40,7 +40,7 @@ const taskItemSchema = {
       type: "integer",
       title: "Minimum interval (minutes)",
       description:
-        "For scheduled runs only: skip this task if the last successful scheduled run was less than this many minutes ago.",
+        "For scheduled runs only: wait at least this many minutes after the last successful run before running again. Value 1 means run on every host schedule tick (about once per minute); higher values throttle across ticks.",
       minimum: 1,
       maximum: 10080,
       default: 1,
@@ -51,7 +51,7 @@ const taskItemSchema = {
 const manifest: PaperclipPluginManifestV1 = {
   id: "plugin-razum-scheduler",
   apiVersion: 1,
-  version: "0.2.1",
+  version: "0.2.4",
   displayName: "Razum scheduler",
   description:
     "Runs one or more shell commands on a timer in project workspaces. Host fires the job every minute; each task’s intervalMinutes throttles how often that command actually runs.",

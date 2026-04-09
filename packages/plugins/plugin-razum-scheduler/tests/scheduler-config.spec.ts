@@ -138,4 +138,9 @@ describe("shouldSkipScheduledRun", () => {
     const last = new Date(t0 - 6 * 60_000).toISOString();
     expect(shouldSkipScheduledRun(last, 5, t0)).toBe(false);
   });
+
+  it("does not throttle when interval is 1 (host already fires ~once per minute)", () => {
+    const last = new Date(t0 - 30_000).toISOString();
+    expect(shouldSkipScheduledRun(last, 1, t0)).toBe(false);
+  });
 });
