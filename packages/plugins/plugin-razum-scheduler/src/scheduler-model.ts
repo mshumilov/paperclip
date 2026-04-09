@@ -111,6 +111,83 @@ export function parseLastRunsMap(raw: unknown): Record<string, string> {
   return out;
 }
 
+function asTrimmedString(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  return String(v);
+}
+
+/**
+ * Build one log row from JSON stored in `plugin_state` / Postgres jsonb.
+ * Driver + round-trip may yield `null` tails, numeric `ok`, string `exitCode`, etc. — strict `typeof` checks drop those and broke verify/UI.
+ */
+export function parseRunHistoryRowFromStorage(x: unknown): SchedulerRunLogEntry | null {
+  if (typeof x !== "object" || x === null) return null;
+  const o = x as Record<string, unknown>;
+  if (typeof o.id !== "string" || !o.id) return null;
+  if (typeof o.at !== "string" || !o.at) return null;
+  if (typeof o.trigger !== "string") return null;
+
+  const running = o.running === true;
+
+  let ok: boolean;
+  if (o.ok === true) ok = true;
+  else if (o.ok === false) ok = false;
+  else if (o.ok === 1 || o.ok === 0) ok = Boolean(o.ok);
+  else return null;
+
+  let exitCode: number | null = null;
+  if (o.exitCode !== null && o.exitCode !== undefined) {
+    if (typeof o.exitCode === "number" && Number.isFinite(o.exitCode)) {
+      exitCode = o.exitCode;
+    } else if (typeof o.exitCode === "string") {
+      const t = o.exitCode.trim();
+      if (t === "") exitCode = null;
+      else if (/^-?\d+$/.test(t)) exitCode = Number(t);
+      else return null;
+    } else {
+      return null;
+    }
+  }
+
+  const cwd = asTrimmedString(o.cwd);
+  const summary = asTrimmedString(o.summary);
+  const stdoutTail = asTrimmedString(o.stdoutTail);
+  const stderrTail = asTrimmedString(o.stderrTail);
+
+  const taskIdRaw = o.taskId;
+  const taskId =
+    taskIdRaw === undefined || taskIdRaw === null
+      ? undefined
+      : typeof taskIdRaw === "string"
+        ? taskIdRaw || undefined
+        : asTrimmedString(taskIdRaw) || undefined;
+
+  const taskLabelRaw = o.taskLabel;
+  const taskLabel =
+    taskLabelRaw === undefined || taskLabelRaw === null
+      ? undefined
+      : typeof taskLabelRaw === "string"
+        ? taskLabelRaw || undefined
+        : asTrimmedString(taskLabelRaw) || undefined;
+
+  const row: SchedulerRunLogEntry = {
+    id: o.id,
+    at: o.at,
+    trigger: o.trigger,
+    ok,
+    exitCode,
+    cwd,
+    summary,
+    stdoutTail,
+    stderrTail,
+    taskId,
+    taskLabel,
+  };
+  if (running) row.running = true;
+  return row;
+}
+
 export function parseRunHistory(raw: unknown): SchedulerRunLogEntry[] {
   if (raw == null) return [];
   let list: unknown = raw;
@@ -122,44 +199,9 @@ export function parseRunHistory(raw: unknown): SchedulerRunLogEntry[] {
     }
   }
   if (!Array.isArray(list)) return [];
-  return list.filter(isRunLogEntry);
-}
-
-function isRunLogEntry(x: unknown): x is SchedulerRunLogEntry {
-  if (typeof x !== "object" || x === null) return false;
-  const o = x as Record<string, unknown>;
-  const taskOk = o.taskId === undefined || o.taskId === null || typeof o.taskId === "string";
-  const labelOk = o.taskLabel === undefined || o.taskLabel === null || typeof o.taskLabel === "string";
-
-  if (o.running === true) {
-    return (
-      taskOk &&
-      labelOk &&
-      typeof o.id === "string" &&
-      typeof o.at === "string" &&
-      typeof o.trigger === "string" &&
-      typeof o.ok === "boolean" &&
-      (o.exitCode === null || typeof o.exitCode === "number") &&
-      typeof o.cwd === "string" &&
-      typeof o.summary === "string" &&
-      typeof o.stdoutTail === "string" &&
-      typeof o.stderrTail === "string"
-    );
-  }
-
-  return (
-    taskOk &&
-    labelOk &&
-    typeof o.id === "string" &&
-    typeof o.at === "string" &&
-    typeof o.trigger === "string" &&
-    typeof o.ok === "boolean" &&
-    (o.exitCode === null || typeof o.exitCode === "number") &&
-    typeof o.cwd === "string" &&
-    typeof o.summary === "string" &&
-    typeof o.stdoutTail === "string" &&
-    typeof o.stderrTail === "string"
-  );
+  return list
+    .map((x) => parseRunHistoryRowFromStorage(x))
+    .filter((x): x is SchedulerRunLogEntry => x != null);
 }
 
 /** Placeholder row while the command is executing; same `id` as the finished row. */

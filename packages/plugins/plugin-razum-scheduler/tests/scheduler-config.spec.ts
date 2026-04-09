@@ -2,13 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   appendRunHistoryEntries,
   makeSchedulerErrorEntry,
-  makeSchedulerRunningEntry,
   mergeRunHistory,
   parseRunHistory,
   parseSchedulerConfig,
   pickWorkspace,
   shouldSkipScheduledRun,
-  upsertRunHistoryEntries,
 } from "../src/scheduler-model.js";
 import { resolveWorkingDirectory } from "../src/scheduler-config.js";
 import type { PluginWorkspace } from "@paperclipai/plugin-sdk";
@@ -156,6 +154,27 @@ describe("parseRunHistory / mergeRunHistory", () => {
     expect(parsed).toHaveLength(1);
     expect(parsed[0]?.taskId).toBe("task-b");
     expect(parsed[0]?.ok).toBe(false);
+  });
+
+  it("accepts jsonb-shaped rows (null tails, string exitCode, numeric ok)", () => {
+    const loose = {
+      id: "run:task-a",
+      at: "2026-01-01T00:00:00.000Z",
+      trigger: "schedule",
+      ok: 0,
+      exitCode: "1",
+      cwd: "/tmp/ws",
+      summary: "failed",
+      stdoutTail: null,
+      stderrTail: null,
+      taskId: "task-a",
+    };
+    const p = parseRunHistory([loose]);
+    expect(p).toHaveLength(1);
+    expect(p[0]?.ok).toBe(false);
+    expect(p[0]?.exitCode).toBe(1);
+    expect(p[0]?.stdoutTail).toBe("");
+    expect(p[0]?.stderrTail).toBe("");
   });
 });
 

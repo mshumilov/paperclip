@@ -219,6 +219,64 @@ const inputStyle: CSSProperties = {
 const sectionTitle: CSSProperties = { fontSize: "15px", fontWeight: 600, margin: "0 0 8px" };
 const helpStyle: CSSProperties = { fontSize: "11px", opacity: 0.65, marginTop: "4px" };
 
+/** Collapsible header for one task’s rows in Execution log. */
+function ExecutionLogTaskHeader({
+  expanded,
+  onToggle,
+  runCount,
+  variant,
+  children,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  runCount: number;
+  variant: "default" | "orphan";
+  children: ReactNode;
+}) {
+  const accent =
+    variant === "orphan" ? "color-mix(in srgb, var(--chart-4, #eab308) 35%, transparent)" : undefined;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={expanded}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "10px",
+        width: "100%",
+        boxSizing: "border-box",
+        textAlign: "left",
+        margin: "0 0 8px",
+        padding: "8px 12px",
+        borderRadius: "8px",
+        border: `1px solid color-mix(in srgb, var(--border, #444) 85%, transparent)`,
+        background: accent ?? "color-mix(in srgb, var(--muted-foreground, #888) 10%, transparent)",
+        color: "var(--foreground, #eee)",
+        cursor: "pointer",
+        fontSize: "14px",
+        fontWeight: 600,
+      }}
+    >
+      <span style={{ fontSize: "10px", width: "1em", flexShrink: 0, opacity: 0.85 }} aria-hidden>
+        {expanded ? "▼" : "▶"}
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>{children}</span>
+      <span
+        style={{
+          fontSize: "12px",
+          fontWeight: 500,
+          opacity: 0.75,
+          flexShrink: 0,
+          fontFamily: "ui-monospace, monospace",
+        }}
+      >
+        {runCount} {runCount === 1 ? "run" : "runs"}
+      </span>
+    </button>
+  );
+}
+
 export function DashboardWidget(_props: PluginWidgetProps) {
   const { data, loading, error } = usePluginData<HealthData>("health");
 
@@ -437,6 +495,8 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
   const projectsFetchedRef = useRef<Set<string>>(new Set());
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  /** Task id → collapsed in Execution log (omitted / false = expanded). */
+  const [executionLogCollapsed, setExecutionLogCollapsed] = useState<Record<string, boolean>>({});
 
   const tasks = (Array.isArray(configJson.tasks) ? configJson.tasks : []) as SchedulerTask[];
 
@@ -815,8 +875,8 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
         <section>
           <h3 style={sectionTitle}>Execution log</h3>
           <p style={{ fontSize: "12px", opacity: 0.75, margin: "0 0 12px" }}>
-            Only <strong>real command runs</strong> are listed, grouped by task (newest first in each group). stdout/stderr
-            appear under each row when the worker captured output.
+            Only <strong>real command runs</strong> are listed, grouped by task (newest first in each group). Click a task
+            header to expand or collapse its log. stdout/stderr appear under each row when the worker captured output.
           </p>
           <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" }}>
             <button
@@ -851,17 +911,18 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
           <div style={{ display: "grid", gap: "20px" }}>
             {tasks.map((task, index) => {
               const runs = runsByTaskId.get(task.id) ?? [];
+              const expanded = !executionLogCollapsed[task.id];
               return (
                 <div key={task.id}>
-                  <h4
-                    style={{
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      margin: "0 0 8px",
-                      color: "var(--foreground, #eee)",
-                    }}
+                  <ExecutionLogTaskHeader
+                    expanded={expanded}
+                    runCount={runs.length}
+                    variant="default"
+                    onToggle={() =>
+                      setExecutionLogCollapsed((prev) => ({ ...prev, [task.id]: !prev[task.id] }))
+                    }
                   >
-                    Task {index + 1}
+                    <span style={{ color: "var(--foreground, #eee)" }}>Task {index + 1}</span>
                     {task.label.trim() ? (
                       <span style={{ fontWeight: 500, marginLeft: "8px" }}>{task.label}</span>
                     ) : null}
@@ -876,50 +937,60 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
                     >
                       {task.id}
                     </span>
-                  </h4>
-                  <div
-                    style={{
-                      border: "1px solid color-mix(in srgb, var(--border, #444) 90%, transparent)",
-                      borderRadius: "8px",
-                      overflow: "hidden",
-                    }}
-                  >
-                    {runs.length === 0 ? (
-                      <p style={{ fontSize: "12px", opacity: 0.7, margin: "12px 14px" }}>No recorded runs for this task.</p>
-                    ) : (
-                      runs.map((run) => <RunLogRow key={run.id} run={run} />)
-                    )}
-                  </div>
+                  </ExecutionLogTaskHeader>
+                  {expanded ? (
+                    <div
+                      style={{
+                        border: "1px solid color-mix(in srgb, var(--border, #444) 90%, transparent)",
+                        borderRadius: "8px",
+                        overflow: "hidden",
+                      }}
+                    >
+                      {runs.length === 0 ? (
+                        <p style={{ fontSize: "12px", opacity: 0.7, margin: "12px 14px" }}>
+                          No recorded runs for this task.
+                        </p>
+                      ) : (
+                        runs.map((run) => <RunLogRow key={run.id} run={run} />)
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
 
             {orphanTaskIds.map((tid) => {
               const runs = runsByTaskId.get(tid) ?? [];
+              const expanded = !executionLogCollapsed[`orphan:${tid}`];
               return (
                 <div key={tid}>
-                  <h4
-                    style={{
-                      fontSize: "14px",
-                      fontWeight: 600,
-                      margin: "0 0 8px",
-                      color: "var(--chart-4, #eab308)",
-                    }}
+                  <ExecutionLogTaskHeader
+                    expanded={expanded}
+                    runCount={runs.length}
+                    variant="orphan"
+                    onToggle={() =>
+                      setExecutionLogCollapsed((prev) => ({
+                        ...prev,
+                        [`orphan:${tid}`]: !prev[`orphan:${tid}`],
+                      }))
+                    }
                   >
-                    Task no longer in settings{" "}
+                    <span style={{ color: "var(--chart-4, #eab308)" }}>Task no longer in settings</span>{" "}
                     <span style={{ fontFamily: "ui-monospace, monospace", fontSize: "11px", fontWeight: 400 }}>{tid}</span>
-                  </h4>
-                  <div
-                    style={{
-                      border: "1px solid color-mix(in srgb, var(--border, #444) 90%, transparent)",
-                      borderRadius: "8px",
-                      overflow: "hidden",
-                    }}
-                  >
-                    {runs.map((run) => (
-                      <RunLogRow key={run.id} run={run} />
-                    ))}
-                  </div>
+                  </ExecutionLogTaskHeader>
+                  {expanded ? (
+                    <div
+                      style={{
+                        border: "1px solid color-mix(in srgb, var(--border, #444) 90%, transparent)",
+                        borderRadius: "8px",
+                        overflow: "hidden",
+                      }}
+                    >
+                      {runs.map((run) => (
+                        <RunLogRow key={run.id} run={run} />
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
