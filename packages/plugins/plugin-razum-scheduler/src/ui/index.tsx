@@ -61,6 +61,7 @@ type RunHistoryData = {
     stderrTail: string;
     taskId?: string;
     taskLabel?: string;
+    running?: boolean;
   }>;
 };
 
@@ -146,6 +147,7 @@ function firstNonEmptyLine(text: string, maxLen: number): string {
 
 /** Short hint for failed runs (full stderr/stdout stays in the expandable block). */
 function runFailureHint(run: RunHistoryData["runs"][number]): string | null {
+  if (run.running) return null;
   if (run.ok) return null;
   if (run.stderrTail?.trim()) return firstNonEmptyLine(run.stderrTail, 500);
   if (run.stdoutTail?.trim()) return firstNonEmptyLine(run.stdoutTail, 500);
@@ -239,6 +241,7 @@ export function DashboardWidget(_props: PluginWidgetProps) {
 
 function RunLogRow({ run, nested }: { run: RunHistoryData["runs"][number]; nested?: boolean }) {
   const { stdoutTail, stderrTail } = run;
+  const isRunning = Boolean(run.running);
   const hasOutput = Boolean(stdoutTail || stderrTail);
   const failureHint = runFailureHint(run);
   const pad = nested ? "8px 0 8px 12px" : "10px 14px";
@@ -294,12 +297,22 @@ function RunLogRow({ run, nested }: { run: RunHistoryData["runs"][number]; neste
               </span>
             ) : null}
             <span style={{ color: "var(--muted-foreground, #9ca3af)", marginLeft: "6px" }}>
-              plugin-razum-scheduler: {run.summary}
+              plugin-razum-scheduler:{" "}
+              {isRunning ? (
+                <span style={{ color: "var(--chart-2, #22c55e)", fontStyle: "italic" }}>{run.summary}</span>
+              ) : (
+                run.summary
+              )}
             </span>
             <span style={{ color: "var(--muted-foreground, #9ca3af)", marginLeft: "6px", fontSize: "11px" }}>
               ({run.trigger})
             </span>
           </div>
+          {isRunning ? (
+            <p style={{ fontSize: "11px", color: "var(--muted-foreground, #9ca3af)", margin: "6px 0 0" }}>
+              Command is executing; this row updates when the run finishes (auto-refresh ~3s).
+            </p>
+          ) : null}
           {failureHint ? (
             <div
               style={{
@@ -319,7 +332,7 @@ function RunLogRow({ run, nested }: { run: RunHistoryData["runs"][number]; neste
               {failureHint}
             </div>
           ) : null}
-          {hasOutput ? (
+          {isRunning ? null : hasOutput ? (
             <details style={{ marginTop: "8px" }}>
               <summary
                 style={{
@@ -432,7 +445,7 @@ export function SchedulerSettingsPage({ context }: PluginSettingsPageProps) {
     void refresh();
     const t = window.setInterval(() => {
       void refresh();
-    }, 8000);
+    }, 3000);
     return () => window.clearInterval(t);
   }, [tab, refresh]);
 

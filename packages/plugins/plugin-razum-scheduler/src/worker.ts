@@ -4,16 +4,21 @@ import {
   JOB_KEY,
   STATE_LAST_RUNS,
   STATE_RUN_HISTORY,
-  appendRunHistoryEntries,
+  makeSchedulerErrorEntry,
+  makeSchedulerRunningEntry,
   parseLastRunsMap,
   parseRunHistory,
   parseSchedulerConfig,
   pickWorkspace,
   resolveWorkingDirectory,
   shouldSkipScheduledRun,
+  upsertRunHistoryEntries,
   type SchedulerRunLogEntry,
   type SchedulerTask,
 } from "./scheduler-config.js";
+
+/** One shell at a time per task id (covers overlapping host ticks / concurrent RPC if that ever happens). */
+const taskShellInFlight = new Set<string>();
 
 function runShellCommand(cwd: string, command: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -44,22 +49,22 @@ async function loadLastRunsMap(ctx: PluginContext): Promise<Record<string, strin
 }
 
 /**
- * Persist all run log rows for one host job in a single read-merge-write.
- * Avoids losing task B's row when task A wrote run-history a few ms earlier in the same tick.
+ * Read-merge-write run-history with upsert by row `id` (retries on lost updates).
+ * Replaces "running" placeholders with final rows and avoids dropping other tasks' rows.
  */
-async function flushRunHistoryBatch(ctx: PluginContext, entries: SchedulerRunLogEntry[]): Promise<void> {
+async function flushRunHistoryUpsert(ctx: PluginContext, entries: SchedulerRunLogEntry[]): Promise<void> {
   if (entries.length === 0) return;
   const historyKey = { scopeKind: "instance" as const, stateKey: STATE_RUN_HISTORY };
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const prev = await ctx.state.get(historyKey);
-    const next = appendRunHistoryEntries(prev, entries);
+    const next = upsertRunHistoryEntries(prev, entries);
     await ctx.state.set(historyKey, next);
     const verify = parseRunHistory(await ctx.state.get(historyKey));
     if (entries.every((e) => verify.some((r) => r.id === e.id))) {
       return;
     }
   }
-  ctx.logger.warn("run-history: batch flush could not verify after retries", {
+  ctx.logger.warn("run-history: upsert flush could not verify after retries", {
     ids: entries.map((e) => e.id),
   });
 }
@@ -69,88 +74,154 @@ async function runOneTask(
   job: PluginJobContext,
   task: SchedulerTask,
   nowMs: number,
-): Promise<SchedulerRunLogEntry> {
-  const workspaces = await ctx.projects.listWorkspaces(task.projectId, task.companyId);
-  const workspace = pickWorkspace(workspaces, task.workspaceName);
-  if (!workspace) {
-    const hint = task.workspaceName ? `named "${task.workspaceName}"` : "primary";
-    throw new Error(`No workspace ${hint} for this project`);
-  }
-
-  const cwd = resolveWorkingDirectory(workspace.path, task.cwdSubdir);
+): Promise<SchedulerRunLogEntry | null> {
   const taskTag = task.label || task.id;
-  ctx.logger.info("Running workspace command", {
-    runId: job.runId,
-    taskId: task.id,
-    trigger: job.trigger,
-    cwd,
-    commandPreview: task.command.length > 120 ? `${task.command.slice(0, 120)}…` : task.command,
-  });
 
-  let code: number | null;
-  let stdout: string;
-  let stderr: string;
   try {
-    const r = await runShellCommand(cwd, task.command);
-    code = r.code;
-    stdout = r.stdout;
-    stderr = r.stderr;
-  } catch (err) {
-    code = null;
-    stdout = "";
-    stderr = err instanceof Error ? err.message : String(err);
-  }
+    const workspaces = await ctx.projects.listWorkspaces(task.projectId, task.companyId);
+    const workspace = pickWorkspace(workspaces, task.workspaceName);
+    if (!workspace) {
+      const hint = task.workspaceName ? `named "${task.workspaceName}"` : "primary";
+      const msg = `No workspace ${hint} for this project`;
+      await ctx.activity.log({
+        companyId: task.companyId,
+        message: `plugin-razum-scheduler [${taskTag}]: setup failed — ${msg}`,
+        entityType: "plugin_job",
+        entityId: job.runId,
+        metadata: {
+          pluginId: ctx.manifest.id,
+          jobKey: job.jobKey,
+          taskId: task.id,
+          exitCode: null,
+          error: msg,
+        },
+      });
+      return makeSchedulerErrorEntry({
+        jobRunId: job.runId,
+        task,
+        trigger: job.trigger,
+        message: msg,
+      });
+    }
 
-  const stdoutTail = stdout.length > 4000 ? `${stdout.slice(0, 4000)}…` : stdout;
-  const stderrTail = stderr.length > 2000 ? `${stderr.slice(0, 2000)}…` : stderr;
+    const cwd = resolveWorkingDirectory(workspace.path, task.cwdSubdir);
 
-  await ctx.activity.log({
-    companyId: task.companyId,
-    message:
-      code === 0
-        ? `plugin-razum-scheduler [${taskTag}]: command succeeded (exit ${code})`
-        : `plugin-razum-scheduler [${taskTag}]: command failed (exit ${code ?? "null"})`,
-    entityType: "plugin_job",
-    entityId: job.runId,
-    metadata: {
-      pluginId: ctx.manifest.id,
-      jobKey: job.jobKey,
+    if (taskShellInFlight.has(task.id)) {
+      ctx.logger.debug("Skipping task — previous shell for this task is still running", {
+        taskId: task.id,
+        runId: job.runId,
+      });
+      return null;
+    }
+
+    ctx.logger.info("Running workspace command", {
+      runId: job.runId,
       taskId: task.id,
+      trigger: job.trigger,
       cwd,
-      exitCode: code,
-      stdoutTail,
-      stderrTail,
-    },
-  });
+      commandPreview: task.command.length > 120 ? `${task.command.slice(0, 120)}…` : task.command,
+    });
 
-  const entry: SchedulerRunLogEntry = {
-    id: `${job.runId}:${task.id}`,
-    at: new Date().toISOString(),
-    trigger: job.trigger,
-    ok: code === 0,
-    exitCode: code,
-    cwd,
-    summary:
-      code === 0
-        ? `command succeeded (exit ${code})`
-        : `command failed (exit ${code ?? "null"})`,
-    stdoutTail,
-    stderrTail,
-    taskId: task.id,
-    taskLabel: task.label || undefined,
-  };
+    taskShellInFlight.add(task.id);
+    try {
+      await flushRunHistoryUpsert(ctx, [
+        makeSchedulerRunningEntry({
+          jobRunId: job.runId,
+          task,
+          trigger: job.trigger,
+          cwd,
+        }),
+      ]);
 
-  if (code === 0 && job.trigger === "schedule") {
-    const lastRunsKey = { scopeKind: "instance" as const, stateKey: STATE_LAST_RUNS };
-    const prevMapRaw = await ctx.state.get(lastRunsKey);
-    const prevMap = parseLastRunsMap(prevMapRaw);
-    await ctx.state.set(lastRunsKey, {
-      ...prevMap,
-      [task.id]: new Date(nowMs).toISOString(),
+      let code: number | null;
+      let stdout: string;
+      let stderr: string;
+      try {
+        const r = await runShellCommand(cwd, task.command);
+        code = r.code;
+        stdout = r.stdout;
+        stderr = r.stderr;
+      } catch (err) {
+        code = null;
+        stdout = "";
+        stderr = err instanceof Error ? err.message : String(err);
+      }
+
+      const stdoutTail = stdout.length > 4000 ? `${stdout.slice(0, 4000)}…` : stdout;
+      const stderrTail = stderr.length > 2000 ? `${stderr.slice(0, 2000)}…` : stderr;
+
+      await ctx.activity.log({
+        companyId: task.companyId,
+        message:
+          code === 0
+            ? `plugin-razum-scheduler [${taskTag}]: command succeeded (exit ${code})`
+            : `plugin-razum-scheduler [${taskTag}]: command failed (exit ${code ?? "null"})`,
+        entityType: "plugin_job",
+        entityId: job.runId,
+        metadata: {
+          pluginId: ctx.manifest.id,
+          jobKey: job.jobKey,
+          taskId: task.id,
+          cwd,
+          exitCode: code,
+          stdoutTail,
+          stderrTail,
+        },
+      });
+
+      const entry: SchedulerRunLogEntry = {
+        id: `${job.runId}:${task.id}`,
+        at: new Date().toISOString(),
+        trigger: job.trigger,
+        ok: code === 0,
+        exitCode: code,
+        cwd,
+        summary:
+          code === 0
+            ? `command succeeded (exit ${code})`
+            : `command failed (exit ${code ?? "null"})`,
+        stdoutTail,
+        stderrTail,
+        taskId: task.id,
+        taskLabel: task.label || undefined,
+      };
+
+      if (code === 0 && job.trigger === "schedule") {
+        const lastRunsKey = { scopeKind: "instance" as const, stateKey: STATE_LAST_RUNS };
+        const prevMapRaw = await ctx.state.get(lastRunsKey);
+        const prevMap = parseLastRunsMap(prevMapRaw);
+        await ctx.state.set(lastRunsKey, {
+          ...prevMap,
+          [task.id]: new Date(nowMs).toISOString(),
+        });
+      }
+
+      return entry;
+    } finally {
+      taskShellInFlight.delete(task.id);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await ctx.activity.log({
+      companyId: task.companyId,
+      message: `plugin-razum-scheduler [${taskTag}]: setup failed — ${msg}`,
+      entityType: "plugin_job",
+      entityId: job.runId,
+      metadata: {
+        pluginId: ctx.manifest.id,
+        jobKey: job.jobKey,
+        taskId: task.id,
+        exitCode: null,
+        error: msg,
+      },
+    });
+    return makeSchedulerErrorEntry({
+      jobRunId: job.runId,
+      task,
+      trigger: job.trigger,
+      message: msg,
     });
   }
-
-  return entry;
 }
 
 async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): Promise<void> {
@@ -188,6 +259,9 @@ async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): P
 
     try {
       const entry = await runOneTask(ctx, job, task, now);
+      if (entry === null) {
+        continue;
+      }
       historyBatch.push(entry);
       if (entry.ok) {
         ranAny = true;
@@ -202,10 +276,18 @@ async function runScheduledCommand(ctx: PluginContext, job: PluginJobContext): P
       const msg = err instanceof Error ? err.message : String(err);
       errors.push(`${task.label || task.id}: ${msg}`);
       ranAny = true;
+      historyBatch.push(
+        makeSchedulerErrorEntry({
+          jobRunId: job.runId,
+          task,
+          trigger: job.trigger,
+          message: `Unexpected worker error: ${msg}`,
+        }),
+      );
     }
   }
 
-  await flushRunHistoryBatch(ctx, historyBatch);
+  await flushRunHistoryUpsert(ctx, historyBatch);
 
   // One failing npm script must not mark the whole host job "failed" if another task succeeded.
   if (errors.length > 0 && !succeededAny) {

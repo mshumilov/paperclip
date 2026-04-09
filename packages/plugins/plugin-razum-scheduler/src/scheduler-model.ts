@@ -23,6 +23,8 @@ export interface SchedulerRunLogEntry {
   stderrTail: string;
   taskId?: string;
   taskLabel?: string;
+  /** True while the shell command is in progress (replaced by the final row with the same `id`). */
+  running?: boolean;
 }
 
 export interface SchedulerTask {
@@ -126,9 +128,25 @@ export function parseRunHistory(raw: unknown): SchedulerRunLogEntry[] {
 function isRunLogEntry(x: unknown): x is SchedulerRunLogEntry {
   if (typeof x !== "object" || x === null) return false;
   const o = x as Record<string, unknown>;
-  const taskOk =
-    o.taskId === undefined || typeof o.taskId === "string";
-  const labelOk = o.taskLabel === undefined || typeof o.taskLabel === "string";
+  const taskOk = o.taskId === undefined || o.taskId === null || typeof o.taskId === "string";
+  const labelOk = o.taskLabel === undefined || o.taskLabel === null || typeof o.taskLabel === "string";
+
+  if (o.running === true) {
+    return (
+      taskOk &&
+      labelOk &&
+      typeof o.id === "string" &&
+      typeof o.at === "string" &&
+      typeof o.trigger === "string" &&
+      typeof o.ok === "boolean" &&
+      (o.exitCode === null || typeof o.exitCode === "number") &&
+      typeof o.cwd === "string" &&
+      typeof o.summary === "string" &&
+      typeof o.stdoutTail === "string" &&
+      typeof o.stderrTail === "string"
+    );
+  }
+
   return (
     taskOk &&
     labelOk &&
@@ -144,6 +162,56 @@ function isRunLogEntry(x: unknown): x is SchedulerRunLogEntry {
   );
 }
 
+/** Placeholder row while the command is executing; same `id` as the finished row. */
+export function makeSchedulerRunningEntry(input: {
+  jobRunId: string;
+  task: SchedulerTask;
+  trigger: string;
+  cwd: string;
+}): SchedulerRunLogEntry {
+  const { jobRunId, task, trigger, cwd } = input;
+  return {
+    id: `${jobRunId}:${task.id}`,
+    at: new Date().toISOString(),
+    trigger,
+    running: true,
+    ok: false,
+    exitCode: null,
+    cwd,
+    summary: "Running…",
+    stdoutTail: "",
+    stderrTail: "",
+    taskId: task.id,
+    taskLabel: task.label || undefined,
+  };
+}
+
+/** Log row when the task never reached `exec` (missing workspace, bad cwdSubdir, API error, etc.). */
+export function makeSchedulerErrorEntry(input: {
+  jobRunId: string;
+  task: SchedulerTask;
+  trigger: string;
+  message: string;
+  cwd?: string;
+}): SchedulerRunLogEntry {
+  const { jobRunId, task, trigger, message } = input;
+  const cwd = typeof input.cwd === "string" ? input.cwd : "";
+  const summary = message.length > 200 ? `${message.slice(0, 200)}…` : message;
+  return {
+    id: `${jobRunId}:${task.id}`,
+    at: new Date().toISOString(),
+    trigger,
+    ok: false,
+    exitCode: null,
+    cwd,
+    summary,
+    stdoutTail: "",
+    stderrTail: message,
+    taskId: task.id,
+    taskLabel: task.label || undefined,
+  };
+}
+
 export function mergeRunHistory(
   previous: unknown,
   entry: SchedulerRunLogEntry,
@@ -152,7 +220,7 @@ export function mergeRunHistory(
   return [...prev, entry].slice(-MAX_RUN_HISTORY);
 }
 
-/** Append many entries in one merge (used by the worker once per job run to avoid RMW races). */
+/** Append many entries in one merge (used in tests and simple merges). */
 export function appendRunHistoryEntries(
   previous: unknown,
   entries: SchedulerRunLogEntry[],
@@ -160,6 +228,21 @@ export function appendRunHistoryEntries(
   if (entries.length === 0) return parseRunHistory(previous);
   const prev = parseRunHistory(previous);
   return [...prev, ...entries].slice(-MAX_RUN_HISTORY);
+}
+
+/**
+ * Replace any prior rows with the same `id`, then append new rows (trim to last {@link MAX_RUN_HISTORY}).
+ * Used so a "running" placeholder is overwritten by the final result for that job run + task.
+ */
+export function upsertRunHistoryEntries(
+  previous: unknown,
+  entries: SchedulerRunLogEntry[],
+): SchedulerRunLogEntry[] {
+  if (entries.length === 0) return parseRunHistory(previous);
+  const prev = parseRunHistory(previous);
+  const ids = new Set(entries.map((e) => e.id));
+  const kept = prev.filter((p) => !ids.has(p.id));
+  return [...kept, ...entries].slice(-MAX_RUN_HISTORY);
 }
 
 export function pickWorkspace(workspaces: PluginWorkspace[], name: string): PluginWorkspace | null {

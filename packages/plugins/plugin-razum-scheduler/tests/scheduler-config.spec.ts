@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   appendRunHistoryEntries,
+  makeSchedulerErrorEntry,
+  makeSchedulerRunningEntry,
   mergeRunHistory,
   parseRunHistory,
   parseSchedulerConfig,
   pickWorkspace,
   shouldSkipScheduledRun,
+  upsertRunHistoryEntries,
 } from "../src/scheduler-model.js";
 import { resolveWorkingDirectory } from "../src/scheduler-config.js";
 import type { PluginWorkspace } from "@paperclipai/plugin-sdk";
@@ -130,6 +133,29 @@ describe("parseRunHistory / mergeRunHistory", () => {
       "run-1:task-a",
       "run-1:task-b",
     ]);
+  });
+
+  it("makeSchedulerErrorEntry round-trips through parseRunHistory", () => {
+    const task = {
+      id: "task-b",
+      label: "B",
+      companyId: "c",
+      projectId: "p",
+      workspaceName: "",
+      cwdSubdir: "",
+      command: "true",
+      intervalMinutes: 1,
+    };
+    const e = makeSchedulerErrorEntry({
+      jobRunId: "run-xyz",
+      task,
+      trigger: "schedule",
+      message: "No workspace primary for this project",
+    });
+    const parsed = parseRunHistory(JSON.stringify([e]));
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.taskId).toBe("task-b");
+    expect(parsed[0]?.ok).toBe(false);
   });
 });
 
