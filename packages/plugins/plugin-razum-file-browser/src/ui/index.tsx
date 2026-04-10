@@ -12,7 +12,7 @@ import { javascript } from "@codemirror/lang-javascript";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 
-const PLUGIN_KEY = "razum-file-browser";
+const PLUGIN_KEY = "plugin-razum-file-browser";
 const FILES_TAB_SLOT_ID = "files-tab";
 
 // ---------------------------------------------------------------------------
@@ -920,11 +920,24 @@ export function FilesTab({ context }: PluginDetailTabProps) {
             </div>
           </div>
 
+          {/* Rename dialog */}
+          {renameTarget ? (
+            <RenameDialog
+              currentName={renameTarget.path.split("/").pop() ?? renameTarget.path}
+              onConfirm={(newName) => void handleRename(newName)}
+              onCancel={() => { setRenameTarget(null); setRenameError(null); }}
+            />
+          ) : null}
+          {renameError ? (
+            <div className="border-b border-border px-4 py-2 text-xs text-destructive">{renameError}</div>
+          ) : null}
+
           {/* Delete confirmation */}
           {deleteTarget ? (
             <ConfirmDeleteDialog
-              filePath={deleteTarget}
-              onConfirm={() => void handleDeleteFile()}
+              filePath={deleteTarget.path}
+              isDirectory={deleteTarget.isDirectory}
+              onConfirm={() => void handleDelete()}
               onCancel={() => {
                 setDeleteTarget(null);
                 setDeleteError(null);

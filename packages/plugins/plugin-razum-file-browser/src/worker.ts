@@ -2,7 +2,7 @@ import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const PLUGIN_NAME = "razum-file-browser";
+const PLUGIN_NAME = "plugin-razum-file-browser";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PATH_LIKE_PATTERN = /[\\/]/;
 const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:[\\/]/;

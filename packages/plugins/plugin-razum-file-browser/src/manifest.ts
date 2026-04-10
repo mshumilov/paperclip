@@ -1,6 +1,6 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 
-const PLUGIN_ID = "razum-file-browser";
+const PLUGIN_ID = "plugin-razum-file-browser";
 const FILES_SIDEBAR_SLOT_ID = "files-link";
 const FILES_TAB_SLOT_ID = "files-tab";
 const COMMENT_FILE_LINKS_SLOT_ID = "comment-file-links";
@@ -9,7 +9,7 @@ const COMMENT_OPEN_FILES_SLOT_ID = "comment-open-files";
 const manifest: PaperclipPluginManifestV1 = {
   id: PLUGIN_ID,
   apiVersion: 1,
-  version: "0.1.0",
+  version: "0.1.1",
   displayName: "Razum File Browser",
   description: "File browser plugin with workspace file tree, CodeMirror editor, file creation and deletion. Adds a Files link in the sidebar and a Files tab on the project detail page.",
   author: "Mikhail Shumilov",
