@@ -1,6 +1,6 @@
 {
   "name": "plugin-razum-file-browser",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "private": true,
   "description": "File browser plugin for Paperclip project workspaces with file creation, editing, and deletion.",

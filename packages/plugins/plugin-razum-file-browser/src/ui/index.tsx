@@ -310,20 +310,33 @@ function RenameDialog({
   };
 
   return (
-    <div className="flex items-center gap-1 border-b border-border px-2 py-1">
+    <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
       <span className="text-xs text-muted-foreground shrink-0">Rename:</span>
       <input
         ref={inputRef}
         type="text"
-        className="min-w-0 flex-1 rounded border border-input bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+        className="min-w-[12rem] flex-1 rounded border border-input bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") handleSubmit();
           if (e.key === "Escape") onCancel();
         }}
-        onBlur={onCancel}
       />
+      <button
+        type="button"
+        className="rounded border border-input bg-background px-2 py-1 text-xs text-foreground hover:bg-accent"
+        onClick={() => handleSubmit()}
+      >
+        OK
+      </button>
+      <button
+        type="button"
+        className="rounded border border-input bg-background px-2 py-1 text-xs text-muted-foreground hover:bg-accent"
+        onClick={onCancel}
+      >
+        Cancel
+      </button>
     </div>
   );
 }
@@ -364,6 +377,20 @@ function FileTreeNode({
     setShowMenu((v) => !v);
   };
 
+  const menuButton = (
+    <button
+      type="button"
+      className="shrink-0 rounded px-1.5 text-xs text-muted-foreground hover:bg-accent/80 hover:text-foreground"
+      title="Rename / delete"
+      onClick={(e) => {
+        e.stopPropagation();
+        setShowMenu((v) => !v);
+      }}
+    >
+      ⋯
+    </button>
+  );
+
   const contextMenu = showMenu ? (
     <div className="flex items-center gap-1 py-0.5" style={{ paddingLeft: `${depth * 14 + (entry.isDirectory ? 8 : 23) + 8}px` }}>
       <button
@@ -393,17 +420,22 @@ function FileTreeNode({
   if (entry.isDirectory) {
     return (
       <li>
-        <button
-          type="button"
-          className="flex w-full items-center gap-2 rounded-none px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent/60"
+        <div
+          className="flex w-full items-center gap-1 rounded-none py-1.5 pr-1 text-sm text-foreground hover:bg-accent/60"
           style={{ paddingLeft: `${depth * 14 + 8}px` }}
-          onClick={() => setIsExpanded((v) => !v)}
-          onContextMenu={handleContextMenu}
-          aria-expanded={isExpanded}
         >
-          <span className="w-3 text-xs text-muted-foreground">{isExpanded ? "\u25BE" : "\u25B8"}</span>
-          <span className="truncate font-medium">{entry.name}</span>
-        </button>
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+            onClick={() => setIsExpanded((v) => !v)}
+            onContextMenu={handleContextMenu}
+            aria-expanded={isExpanded}
+          >
+            <span className="w-3 shrink-0 text-xs text-muted-foreground">{isExpanded ? "\u25BE" : "\u25B8"}</span>
+            <span className="truncate font-medium">{entry.name}</span>
+          </button>
+          {menuButton}
+        </div>
         {contextMenu}
         {isExpanded ? (
           <ExpandedDirectoryChildren
@@ -423,17 +455,22 @@ function FileTreeNode({
 
   return (
     <li>
-      <button
-        type="button"
-        className={`flex w-full items-center rounded-none px-2 py-1.5 text-left text-sm transition-colors ${
+      <div
+        className={`flex w-full items-center gap-1 rounded-none py-1.5 pr-1 text-sm transition-colors ${
           isSelected ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
         }`}
         style={{ paddingLeft: `${depth * 14 + 23}px` }}
-        onClick={() => onSelect(entry.path)}
-        onContextMenu={handleContextMenu}
       >
-        <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-      </button>
+        <button
+          type="button"
+          className="min-w-0 flex-1 truncate text-left"
+          onClick={() => onSelect(entry.path)}
+          onContextMenu={handleContextMenu}
+        >
+          {entry.name}
+        </button>
+        {menuButton}
+      </div>
       {contextMenu}
     </li>
   );
@@ -726,7 +763,12 @@ export function FilesTab({ context }: PluginDetailTabProps) {
       } else {
         await deleteFile({ projectId, companyId, workspaceId: selectedWorkspace.id, filePath: deleteTarget.path });
       }
-      if (selectedPath === deleteTarget.path || (deleteTarget.isDirectory && selectedPath?.startsWith(deleteTarget.path + "/"))) {
+      const delNorm = deleteTarget.path.replace(/\\/g, "/");
+      const selNorm = selectedPath?.replace(/\\/g, "/");
+      if (
+        selNorm === delNorm
+        || (deleteTarget.isDirectory && selNorm?.startsWith(`${delNorm}/`))
+      ) {
         setSelectedPath(null);
       }
       setDeleteTarget(null);
@@ -736,20 +778,54 @@ export function FilesTab({ context }: PluginDetailTabProps) {
     }
   }, [selectedWorkspace, deleteTarget, selectedPath, projectId, companyId, deleteFile, deleteDirectory, refreshFileList]);
 
+  const normalizeFsPath = (p: string) => p.replace(/\\/g, "/");
+
   const handleRename = useCallback(async (newName: string) => {
     if (!selectedWorkspace || !renameTarget) return;
     setRenameError(null);
     try {
-      const result = await renameAction({ projectId, companyId, workspaceId: selectedWorkspace.id, oldPath: renameTarget.path, newName }) as { newPath?: string };
-      if (selectedPath === renameTarget.path && result?.newPath) {
-        setSelectedPath(result.newPath);
+      const result = await renameAction({
+        projectId,
+        companyId,
+        workspaceId: selectedWorkspace.id,
+        oldPath: renameTarget.path,
+        newName,
+      }) as { newPath?: string };
+      const newPath = result?.newPath ? normalizeFsPath(result.newPath) : null;
+      const oldPath = normalizeFsPath(renameTarget.path);
+
+      if (newPath && selectedPath) {
+        const sel = normalizeFsPath(selectedPath);
+        if (renameTarget.isDirectory) {
+          if (sel === oldPath) {
+            setSelectedPath(newPath);
+          } else {
+            const prefix = `${oldPath}/`;
+            if (sel.startsWith(prefix)) {
+              setSelectedPath(`${newPath}/${sel.slice(prefix.length)}`);
+            }
+          }
+        } else if (sel === oldPath) {
+          setSelectedPath(newPath);
+        }
       }
+
       setRenameTarget(null);
       refreshFileList();
+      refreshFileContent();
     } catch (error) {
       setRenameError(error instanceof Error ? error.message : String(error));
     }
-  }, [selectedWorkspace, renameTarget, selectedPath, projectId, companyId, renameAction, refreshFileList]);
+  }, [
+    selectedWorkspace,
+    renameTarget,
+    selectedPath,
+    projectId,
+    companyId,
+    renameAction,
+    refreshFileList,
+    refreshFileContent,
+  ]);
 
   return (
     <div className="space-y-4">
@@ -772,6 +848,38 @@ export function FilesTab({ context }: PluginDetailTabProps) {
           })}
         </select>
       </div>
+
+      {/* Rename / delete: kept outside the editor pane so mobile "file tree only" view still shows them */}
+      {renameTarget ? (
+        <RenameDialog
+          currentName={
+            normalizeFsPath(renameTarget.path).split("/").filter(Boolean).pop() ?? renameTarget.path
+          }
+          onConfirm={(newName) => void handleRename(newName)}
+          onCancel={() => {
+            setRenameTarget(null);
+            setRenameError(null);
+          }}
+        />
+      ) : null}
+      {renameError ? (
+        <div className="rounded-lg border border-border bg-card px-4 py-2 text-xs text-destructive">{renameError}</div>
+      ) : null}
+
+      {deleteTarget ? (
+        <ConfirmDeleteDialog
+          filePath={deleteTarget.path}
+          isDirectory={deleteTarget.isDirectory}
+          onConfirm={() => void handleDelete()}
+          onCancel={() => {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }}
+        />
+      ) : null}
+      {deleteError ? (
+        <div className="rounded-lg border border-border bg-card px-4 py-2 text-xs text-destructive">{deleteError}</div>
+      ) : null}
 
       {/* Panes */}
       <div
@@ -919,34 +1027,6 @@ export function FilesTab({ context }: PluginDetailTabProps) {
               </button>
             </div>
           </div>
-
-          {/* Rename dialog */}
-          {renameTarget ? (
-            <RenameDialog
-              currentName={renameTarget.path.split("/").pop() ?? renameTarget.path}
-              onConfirm={(newName) => void handleRename(newName)}
-              onCancel={() => { setRenameTarget(null); setRenameError(null); }}
-            />
-          ) : null}
-          {renameError ? (
-            <div className="border-b border-border px-4 py-2 text-xs text-destructive">{renameError}</div>
-          ) : null}
-
-          {/* Delete confirmation */}
-          {deleteTarget ? (
-            <ConfirmDeleteDialog
-              filePath={deleteTarget.path}
-              isDirectory={deleteTarget.isDirectory}
-              onConfirm={() => void handleDelete()}
-              onCancel={() => {
-                setDeleteTarget(null);
-                setDeleteError(null);
-              }}
-            />
-          ) : null}
-          {deleteError ? (
-            <div className="border-b border-border px-4 py-2 text-xs text-destructive">{deleteError}</div>
-          ) : null}
 
           {/* Status bar */}
           {isDirty || saveMessage || saveError ? (

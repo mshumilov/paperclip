@@ -9,9 +9,9 @@ const COMMENT_OPEN_FILES_SLOT_ID = "comment-open-files";
 const manifest: PaperclipPluginManifestV1 = {
   id: PLUGIN_ID,
   apiVersion: 1,
-  version: "0.1.1",
+  version: "0.1.2",
   displayName: "Razum File Browser",
-  description: "File browser plugin with workspace file tree, CodeMirror editor, file creation and deletion. Adds a Files link in the sidebar and a Files tab on the project detail page.",
+  description: "File browser plugin with workspace file tree, CodeMirror editor, file creation, deletion, folder delete, and rename. Adds a Files link in the sidebar and a Files tab on the project detail page.",
   author: "Mikhail Shumilov",
   categories: ["workspace", "ui"],
   capabilities: [
